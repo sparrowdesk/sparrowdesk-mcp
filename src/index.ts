@@ -116,6 +116,10 @@ function createServer(authToken: string) {
 const app = express();
 app.use(express.json());
 
+app.get("/health", (_req, res) => {
+  res.json({ status: "ok" });
+});
+
 app.all("/mcp", async (req, res) => {
   const authHeader = req.headers.authorization;
   const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
