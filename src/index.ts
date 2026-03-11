@@ -131,7 +131,7 @@ app.all("/mcp", async (req, res) => {
   await transport.handleRequest(req, res, req.body);
 });
 
-app.listen(PORT, () => {
+app.listen(PORT, "0.0.0.0", () => {
   console.log(`SparrowDesk MCP server running on port ${PORT}`);
   console.log(`Endpoint: http://localhost:${PORT}/mcp`);
 });
