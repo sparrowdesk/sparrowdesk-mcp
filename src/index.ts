@@ -7,101 +7,6 @@ const API_BASE = "https://api.sparrowdesk.com/v1";
 const parsedPort = parseInt(process.env.PORT ?? "");
 const PORT = Number.isNaN(parsedPort) ? 3000 : parsedPort;
 
-interface ContactResponse {
-  id: number;
-  full_name: string;
-  email: string | null;
-  phone: string | null;
-  company_name: string | null;
-  blocked: boolean;
-}
-
-interface ConversationResponse {
-  id: number;
-  subject: string;
-  status: string;
-  priority: string;
-  source: string;
-  requested_by_email: string;
-  assigned_to_member_id: number | null;
-  assigned_to_team_id: number | null;
-  created_at: number;
-}
-
-interface ReplyResponse {
-  id: string;
-  type: string;
-  author: { name?: string; email?: string } | null;
-  body_text: string;
-  sent_at: number;
-}
-
-function truncate(s: string | null | undefined, max = 120): string {
-  if (!s) return "";
-  return s.length > max ? s.slice(0, max) + "…" : s;
-}
-
-function toContactMinimal(c: ContactResponse) {
-  return {
-    id: c.id,
-    name: c.full_name,
-    email: c.email ?? null,
-    phone: c.phone ?? null,
-    company: c.company_name ?? null,
-    blocked: c.blocked,
-  };
-}
-
-function toConversationMinimal(c: ConversationResponse) {
-  return {
-    id: c.id,
-    subject: truncate(c.subject, 80),
-    status: c.status,
-    priority: c.priority,
-    source: c.source,
-    contact_email: c.requested_by_email,
-    assigned_to_member_id: c.assigned_to_member_id ?? null,
-    assigned_to_team_id: c.assigned_to_team_id ?? null,
-    created_at: c.created_at,
-  };
-}
-
-function toReplyMinimal(r: ReplyResponse) {
-  return {
-    id: r.id,
-    type: r.type,
-    author: r.author?.name ?? r.author?.email ?? null,
-    body: truncate(r.body_text, 300),
-    sent_at: r.sent_at,
-  };
-}
-
-function conversationsToMarkdown(conversations: ConversationResponse[]): string {
-  if (conversations.length === 0) return "No conversations found.";
-  const rows = conversations.map((c) => {
-    const subject = truncate(c.subject, 60).replace(/\|/g, "\\|");
-    return `| ${c.id} | ${subject} | ${c.status} | ${c.priority} | ${c.requested_by_email} |`;
-  });
-  return [
-    "| ID | Subject | Status | Priority | Contact |",
-    "|----|---------|--------|----------|---------|",
-    ...rows,
-  ].join("\n");
-}
-
-function repliesToMarkdown(replies: ReplyResponse[]): string {
-  if (replies.length === 0) return "No replies found.";
-  const rows = replies.map((r) => {
-    const author = (r.author?.name ?? r.author?.email ?? "unknown").replace(/\|/g, "\\|");
-    const body = truncate(r.body_text, 200).replace(/\|/g, "\\|").replace(/\n/g, " ");
-    return `| ${r.id} | ${r.type} | ${author} | ${body} | ${r.sent_at} |`;
-  });
-  return [
-    "| ID | Type | Author | Body | Sent At |",
-    "|----|------|--------|------|---------|",
-    ...rows,
-  ].join("\n");
-}
 
 function createServer(authToken: string) {
   const server = new McpServer({
@@ -149,20 +54,20 @@ function createServer(authToken: string) {
   server.registerTool(
     "get_conversation",
     {
-      description: "Retrieve a conversation by ID from SparrowDesk",
+      description: "Retrieve a conversation (also called a ticket) by ID from SparrowDesk",
       inputSchema: { id: z.number().int().describe("The conversation ID") },
     },
     async ({ id }) => {
       const result = await apiRequest(`${API_BASE}/conversations/${id}`);
       if (result.error) return { content: [{ type: "text", text: result.error }], isError: true };
-      return { content: [{ type: "text", text: JSON.stringify(toConversationMinimal(result.data), null, 2) }] };
+      return { content: [{ type: "text", text: JSON.stringify(result.data, null, 2) }] };
     }
   );
 
   server.registerTool(
     "list_conversations",
     {
-      description: "List conversations from SparrowDesk with optional filters",
+      description: "List conversations (also called tickets) from SparrowDesk with optional filters",
       inputSchema: {
         starting_after: z.string().optional().describe("Pagination cursor"),
         per_page: z.number().int().min(1).max(100).optional().describe("Items per page (1-100, default 25)"),
@@ -192,17 +97,14 @@ function createServer(authToken: string) {
       const query = params.toString() ? `?${params.toString()}` : "";
       const result = await apiRequest(`${API_BASE}/conversations${query}`);
       if (result.error) return { content: [{ type: "text", text: result.error }], isError: true };
-      const table = conversationsToMarkdown(result.data.data ?? []);
-      const cursor = result.data.pages?.next_cursor ? ` | next_cursor: ${result.data.pages.next_cursor}` : "";
-      const meta = `Total: ${result.data.total_count ?? "?"}${cursor}`;
-      return { content: [{ type: "text", text: `${meta}\n\n${table}` }] };
+      return { content: [{ type: "text", text: JSON.stringify(result.data, null, 2) }] };
     }
   );
 
   server.registerTool(
     "list_conversation_replies",
     {
-      description: "List all replies for a conversation in SparrowDesk",
+      description: "List all replies for a conversation (also called a ticket) in SparrowDesk",
       inputSchema: {
         id: z.number().int().describe("The conversation ID"),
         starting_after: z.string().optional().describe("Pagination cursor"),
@@ -221,10 +123,63 @@ function createServer(authToken: string) {
       const query = params.toString() ? `?${params.toString()}` : "";
       const result = await apiRequest(`${API_BASE}/conversations/${id}/replies${query}`);
       if (result.error) return { content: [{ type: "text", text: result.error }], isError: true };
-      const table = repliesToMarkdown(result.data.data ?? []);
-      const cursor = result.data.pages?.next_cursor ? ` | next_cursor: ${result.data.pages.next_cursor}` : "";
-      const meta = `Total: ${result.data.total_count ?? "?"}${cursor}`;
-      return { content: [{ type: "text", text: `${meta}\n\n${table}` }] };
+      return { content: [{ type: "text", text: JSON.stringify(result.data, null, 2) }] };
+    }
+  );
+
+  server.registerTool(
+    "add_conversation_reply",
+    {
+      description: "Add a reply or internal note to a conversation (also called a ticket) in SparrowDesk",
+      inputSchema: {
+        id: z.number().int().describe("The conversation ID"),
+        reply_text: z.string().describe("The content of the reply message"),
+        type: z.enum(["REPLY", "INTERNAL_NOTE"]).describe("REPLY sends a response to the customer; INTERNAL_NOTE is an internal-only comment not visible to the requestor"),
+      },
+    },
+    async ({ id, reply_text, type }) => {
+      const result = await apiRequest(`${API_BASE}/conversations/${id}/reply`, {
+        method: "POST",
+        body: { reply_text, type },
+      });
+      if (result.error) return { content: [{ type: "text", text: result.error }], isError: true };
+      return { content: [{ type: "text", text: JSON.stringify(result.data, null, 2) }] };
+    }
+  );
+
+  server.registerTool(
+    "create_conversation",
+    {
+      description: "Create a new conversation (also called a ticket) in SparrowDesk",
+      inputSchema: {
+        subject: z.string().describe("Conversation subject"),
+        description: z.string().describe("Conversation description"),
+        requested_by: z.string().describe("Email or phone number of the requester"),
+        priority: z.enum(["Low", "Medium", "High", "Urgent"]).optional().describe("Priority level (default: Medium)"),
+        source: z.enum(["Mail", "Call"]).optional().describe("Source channel (default: Call)"),
+        status: z.enum(["Open", "Pending", "Resolved", "Closed"]).optional().describe("Initial status (default: Open)"),
+        brand_id: z.number().int().optional().describe("Brand ID (uses account default if omitted)"),
+        assignee: z.email().optional().describe("Agent email address to assign the conversation to"),
+        team_id: z.number().int().optional().describe("Team ID to assign the conversation to"),
+        custom_fields: z.array(z.object({
+          internal_name: z.string().describe("Custom field internal name"),
+          value: z.unknown().describe("Custom field value"),
+        })).optional().describe("Custom field values"),
+      },
+    },
+    async ({ subject, description, requested_by, priority, source, status, brand_id, assignee, team_id, custom_fields }) => {
+      const body: Record<string, unknown> = { subject, description, requested_by };
+      if (priority !== undefined) body.priority = priority;
+      if (source !== undefined) body.source = source;
+      if (status !== undefined) body.status = status;
+      if (brand_id !== undefined) body.brand_id = brand_id;
+      if (assignee !== undefined) body.assignee = assignee;
+      if (team_id !== undefined) body.team_id = team_id;
+      if (custom_fields !== undefined) body.custom_fields = custom_fields;
+
+      const result = await apiRequest(`${API_BASE}/conversations`, { method: "POST", body });
+      if (result.error) return { content: [{ type: "text", text: result.error }], isError: true };
+      return { content: [{ type: "text", text: JSON.stringify(result.data, null, 2) }] };
     }
   );
 
@@ -254,7 +209,7 @@ function createServer(authToken: string) {
 
       const result = await apiRequest(`${API_BASE}/contacts`, { method: "POST", body });
       if (result.error) return { content: [{ type: "text", text: result.error }], isError: true };
-      return { content: [{ type: "text", text: JSON.stringify(toContactMinimal(result.data), null, 2) }] };
+      return { content: [{ type: "text", text: JSON.stringify(result.data, null, 2) }] };
     }
   );
 
@@ -289,7 +244,7 @@ function createServer(authToken: string) {
 
       const result = await apiRequest(`${API_BASE}/contacts/${id}`, { method: "PATCH", body });
       if (result.error) return { content: [{ type: "text", text: result.error }], isError: true };
-      return { content: [{ type: "text", text: JSON.stringify(toContactMinimal(result.data), null, 2) }] };
+      return { content: [{ type: "text", text: JSON.stringify(result.data, null, 2) }] };
     }
   );
 
@@ -302,7 +257,7 @@ function createServer(authToken: string) {
     async ({ id }) => {
       const result = await apiRequest(`${API_BASE}/contacts/${id}`);
       if (result.error) return { content: [{ type: "text", text: result.error }], isError: true };
-      return { content: [{ type: "text", text: JSON.stringify(toContactMinimal(result.data), null, 2) }] };
+      return { content: [{ type: "text", text: JSON.stringify(result.data, null, 2) }] };
     }
   );
 
