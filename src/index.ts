@@ -1,11 +1,39 @@
+import crypto from "crypto";
 import express from "express";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
 
-const API_BASE = "https://api.sparrowdesk.com/v1";
+const API_BASE = (process.env.SPARROWDESK_API_BASE ?? "https://api.sparrowdesk.com/v1").replace(/\/$/, "");
 const parsedPort = parseInt(process.env.PORT ?? "");
 const PORT = Number.isNaN(parsedPort) ? 3000 : parsedPort;
+
+const MCP_PUBLIC_URL = (process.env.MCP_PUBLIC_URL ?? "https://mcp.campaignsparrow.com").replace(/\/$/, "");
+const SD_OAUTH_ISSUER = (process.env.SPARROWDESK_OAUTH_ISSUER ?? "").replace(/\/$/, "");
+const SD_AUTHORIZE_URL = process.env.SPARROWDESK_OAUTH_AUTHORIZE_URL ?? `${SD_OAUTH_ISSUER}/oauth/authorize`;
+const SD_TOKEN_URL = process.env.SPARROWDESK_OAUTH_TOKEN_URL ?? `${SD_OAUTH_ISSUER}/oauth/token`;
+const SD_CLIENT_ID = process.env.SPARROWDESK_CLIENT_ID ?? "";
+const SD_CLIENT_SECRET = process.env.SPARROWDESK_CLIENT_SECRET ?? "";
+
+// In-memory OAuth state — acceptable for single-instance deployment
+interface PendingAuth {
+  clientRedirectUri: string;
+  clientState: string;
+  codeChallenge?: string;
+  codeChallengeMethod?: string;
+  scope?: string;
+}
+interface PendingCode {
+  token: string;
+  clientRedirectUri: string;
+  codeChallenge?: string;
+  codeChallengeMethod?: string;
+}
+const pendingAuth = new Map<string, PendingAuth>();
+const pendingCodes = new Map<string, PendingCode>();
+function expireAfter(map: Map<string, unknown>, key: string, ms = 10 * 60 * 1000) {
+  setTimeout(() => map.delete(key), ms);
+}
 
 
 function createServer(authToken: string) {
@@ -266,9 +294,168 @@ function createServer(authToken: string) {
 
 const app = express();
 app.use(express.json());
+app.use(express.urlencoded({ extended: false }));
 
 app.get("/health", (_req, res) => {
   res.json({ status: "ok" });
+});
+
+// OAuth discovery endpoints
+app.get("/.well-known/oauth-authorization-server", (_req, res) => {
+  res.json({
+    issuer: MCP_PUBLIC_URL,
+    authorization_endpoint: `${MCP_PUBLIC_URL}/oauth/authorize`,
+    token_endpoint: `${MCP_PUBLIC_URL}/oauth/token`,
+    registration_endpoint: `${MCP_PUBLIC_URL}/oauth/register`,
+    response_types_supported: ["code"],
+    grant_types_supported: ["authorization_code"],
+    code_challenge_methods_supported: ["S256"],
+  });
+});
+
+// Dynamic client registration (RFC 7591) — we proxy to SparrowDesk with a fixed app,
+// so we just issue a client_id and store the redirect_uris for later validation.
+const registeredClients = new Map<string, { redirectUris: string[] }>();
+
+app.post("/oauth/register", (req, res) => {
+  const { redirect_uris, client_name } = req.body as { redirect_uris?: string[]; client_name?: string };
+
+  if (!redirect_uris?.length) {
+    res.status(400).json({ error: "invalid_client_metadata", error_description: "redirect_uris required" });
+    return;
+  }
+
+  const clientId = crypto.randomBytes(16).toString("hex");
+  registeredClients.set(clientId, { redirectUris: redirect_uris });
+  console.log(`OAuth client registered: ${client_name ?? "unknown"} (${clientId})`);
+
+  res.status(201).json({
+    client_id: clientId,
+    client_secret_expires_at: 0,
+    redirect_uris,
+    grant_types: ["authorization_code"],
+    response_types: ["code"],
+    token_endpoint_auth_method: "none",
+  });
+});
+
+app.get("/.well-known/oauth-protected-resource", (_req, res) => {
+  res.json({
+    resource: MCP_PUBLIC_URL,
+    authorization_servers: [MCP_PUBLIC_URL],
+    bearer_methods_supported: ["header"],
+  });
+});
+
+// Step 1: MCP client → this server → SparrowDesk
+app.get("/oauth/authorize", (req, res) => {
+  const { redirect_uri, state, code_challenge, code_challenge_method, scope } = req.query as Record<string, string>;
+
+  if (!redirect_uri || !state) {
+    res.status(400).json({ error: "invalid_request", error_description: "Missing redirect_uri or state" });
+    return;
+  }
+
+  const internalState = crypto.randomBytes(16).toString("hex");
+  pendingAuth.set(internalState, {
+    clientRedirectUri: redirect_uri,
+    clientState: state,
+    codeChallenge: code_challenge,
+    codeChallengeMethod: code_challenge_method,
+    scope,
+  });
+  expireAfter(pendingAuth, internalState);
+
+  const params = new URLSearchParams({
+    client_id: SD_CLIENT_ID,
+    redirect_uri: `${MCP_PUBLIC_URL}/oauth/callback`,
+    response_type: "code",
+    state: internalState,
+  });
+  if (scope) params.set("scope", scope);
+
+  res.redirect(`${SD_AUTHORIZE_URL}?${params.toString()}`);
+});
+
+// Step 2: SparrowDesk → this server (callback)
+app.get("/oauth/callback", async (req, res) => {
+  const { code, state, error } = req.query as Record<string, string>;
+
+  if (error) {
+    res.status(400).send(`OAuth error: ${error}`);
+    return;
+  }
+
+  const pending = pendingAuth.get(state);
+  if (!pending) {
+    res.status(400).json({ error: "invalid_request", error_description: "Invalid or expired state" });
+    return;
+  }
+  pendingAuth.delete(state);
+
+  const tokenRes = await fetch(SD_TOKEN_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "authorization_code",
+      code,
+      redirect_uri: `${MCP_PUBLIC_URL}/oauth/callback`,
+      client_id: SD_CLIENT_ID,
+      client_secret: SD_CLIENT_SECRET,
+    }).toString(),
+  });
+
+  if (!tokenRes.ok) {
+    const text = await tokenRes.text();
+    res.status(502).send(`Token exchange failed: ${text}`);
+    return;
+  }
+
+  const tokenData = await tokenRes.json() as { access_token: string };
+  const ourCode = crypto.randomBytes(16).toString("hex");
+  pendingCodes.set(ourCode, {
+    token: tokenData.access_token,
+    clientRedirectUri: pending.clientRedirectUri,
+    codeChallenge: pending.codeChallenge,
+    codeChallengeMethod: pending.codeChallengeMethod,
+  });
+  expireAfter(pendingCodes, ourCode);
+
+  const redirectUrl = new URL(pending.clientRedirectUri);
+  redirectUrl.searchParams.set("code", ourCode);
+  redirectUrl.searchParams.set("state", pending.clientState);
+  res.redirect(redirectUrl.toString());
+});
+
+// Step 3: MCP client exchanges our code for token
+app.post("/oauth/token", (req, res) => {
+  const { code, code_verifier, redirect_uri } = req.body as Record<string, string>;
+
+  const pending = pendingCodes.get(code);
+  if (!pending) {
+    res.status(400).json({ error: "invalid_grant", error_description: "Invalid or expired code" });
+    return;
+  }
+
+  if (pending.codeChallenge && pending.codeChallengeMethod === "S256") {
+    if (!code_verifier) {
+      res.status(400).json({ error: "invalid_grant", error_description: "code_verifier required" });
+      return;
+    }
+    const challenge = crypto.createHash("sha256").update(code_verifier).digest().toString("base64url");
+    if (challenge !== pending.codeChallenge) {
+      res.status(400).json({ error: "invalid_grant", error_description: "PKCE verification failed" });
+      return;
+    }
+  }
+
+  if (redirect_uri && redirect_uri !== pending.clientRedirectUri) {
+    res.status(400).json({ error: "invalid_grant", error_description: "redirect_uri mismatch" });
+    return;
+  }
+
+  pendingCodes.delete(code);
+  res.json({ access_token: pending.token, token_type: "Bearer" });
 });
 
 app.all("/mcp", async (req, res) => {
@@ -276,7 +463,10 @@ app.all("/mcp", async (req, res) => {
   const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
 
   if (!token) {
-    res.status(401).json({ error: "Authorization header with Bearer token is required" });
+    res
+      .status(401)
+      .set("WWW-Authenticate", `Bearer resource_metadata="${MCP_PUBLIC_URL}/.well-known/oauth-protected-resource"`)
+      .json({ error: "Authorization header with Bearer token is required" });
     return;
   }
 
