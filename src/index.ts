@@ -289,6 +289,41 @@ function createServer(authToken: string) {
     }
   );
 
+  server.registerTool(
+    "list_contact_fields",
+    {
+      description: "Retrieve all contact fields from SparrowDesk",
+      inputSchema: {
+        search: z.string().optional().describe("Search contact fields by name"),
+        page: z.number().int().optional().describe("Page number for pagination"),
+        limit: z.number().int().optional().describe("Results per page"),
+      },
+    },
+    async ({ search, page, limit }) => {
+      const params = new URLSearchParams();
+      if (search) params.set("search", search);
+      if (page) params.set("page", String(page));
+      if (limit) params.set("limit", String(limit));
+      const query = params.toString() ? `?${params.toString()}` : "";
+      const result = await apiRequest(`${API_BASE}/contact-fields${query}`);
+      if (result.error) return { content: [{ type: "text", text: result.error }], isError: true };
+      return { content: [{ type: "text", text: JSON.stringify(result.data, null, 2) }] };
+    }
+  );
+
+  server.registerTool(
+    "get_me",
+    {
+      description: "Retrieve the currently authenticated member's profile from SparrowDesk",
+      inputSchema: {},
+    },
+    async () => {
+      const result = await apiRequest(`${API_BASE}/me`);
+      if (result.error) return { content: [{ type: "text", text: result.error }], isError: true };
+      return { content: [{ type: "text", text: JSON.stringify(result.data, null, 2) }] };
+    }
+  );
+
   return server;
 }
 
@@ -315,8 +350,6 @@ app.get("/.well-known/oauth-authorization-server", (_req, res) => {
 
 // Dynamic client registration (RFC 7591) — we proxy to SparrowDesk with a fixed app,
 // so we just issue a client_id and store the redirect_uris for later validation.
-const registeredClients = new Map<string, { redirectUris: string[] }>();
-
 app.post("/oauth/register", (req, res) => {
   const { redirect_uris, client_name } = req.body as { redirect_uris?: string[]; client_name?: string };
 
@@ -326,7 +359,6 @@ app.post("/oauth/register", (req, res) => {
   }
 
   const clientId = crypto.randomBytes(16).toString("hex");
-  registeredClients.set(clientId, { redirectUris: redirect_uris });
   console.log(`OAuth client registered: ${client_name ?? "unknown"} (${clientId})`);
 
   res.status(201).json({
@@ -366,13 +398,25 @@ app.get("/oauth/authorize", (req, res) => {
   });
   expireAfter(pendingAuth, internalState);
 
+  const defaultScope = [
+    "MANAGE_CONTACTS",
+    "VIEW_ALL_TICKETS",
+    "VIEW_CONTACTS",
+    "VIEW_OWN_TICKETS",
+    "EDIT_OWN_TICKETS",
+    "DELETE_OWN_TICKETS",
+    "VIEW_ALL_TAGS",
+    "EDIT_ALL_TICKETS",
+    "DELETE_ALL_TICKETS",
+  ].join(" ");
+
   const params = new URLSearchParams({
     client_id: SD_CLIENT_ID,
     redirect_uri: `${MCP_PUBLIC_URL}/oauth/callback`,
     response_type: "code",
     state: internalState,
+    scope: scope || defaultScope,
   });
-  if (scope) params.set("scope", scope);
 
   res.redirect(`${SD_AUTHORIZE_URL}?${params.toString()}`);
 });
