@@ -8,7 +8,16 @@
 npm install
 ```
 
-### 2. Run the server
+### 2. Configure environment variables
+
+```bash
+export SPARROWDESK_CLIENT_ID=your_client_id
+export SPARROWDESK_CLIENT_SECRET=your_client_secret
+export SPARROWDESK_OAUTH_ISSUER=https://app.sparrowdesk.com
+export MCP_PUBLIC_URL=http://localhost:3000
+```
+
+### 3. Run the server
 
 ```bash
 npm run dev
@@ -21,7 +30,7 @@ curl http://localhost:3000/health
 # {"status":"ok"}
 ```
 
-### 3. Configure your MCP client
+### 4. Configure your MCP client
 
 **Cursor** (`~/.cursor/mcp.json`):
 
@@ -29,10 +38,8 @@ curl http://localhost:3000/health
 {
   "mcpServers": {
     "sparrowdesk": {
-      "url": "http://localhost:3000/mcp",
-      "headers": {
-        "Authorization": "Bearer <your_sparrowdesk_api_key>"
-      }
+      "type": "http",
+      "url": "http://localhost:3000/mcp"
     }
   }
 }
@@ -44,39 +51,25 @@ curl http://localhost:3000/health
 {
   "mcpServers": {
     "sparrowdesk": {
-      "url": "http://localhost:3000/mcp",
-      "headers": {
-        "Authorization": "Bearer <your_sparrowdesk_api_key>"
-      }
+      "type": "http",
+      "url": "http://localhost:3000/mcp"
     }
   }
 }
 ```
 
-### 4. Test a tool call directly
-
-```bash
-curl -X POST http://localhost:3000/mcp \
-  -H "Authorization: Bearer <your_sparrowdesk_api_key>" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "jsonrpc": "2.0",
-    "id": 1,
-    "method": "tools/list",
-    "params": {}
-  }'
-```
+Your MCP client will open a browser window to complete the OAuth login with your SparrowDesk account.
 
 ---
 
 ## Deployed Server
 
-The server is live at `https://mcp.campaignsparrow.com`.
+The server is live at `https://mcp.sparrowdesk.com`.
 
 ### 1. Verify the server is up
 
 ```bash
-curl https://mcp.campaignsparrow.com/health
+curl https://mcp.sparrowdesk.com/health
 # {"status":"ok"}
 ```
 
@@ -88,10 +81,8 @@ curl https://mcp.campaignsparrow.com/health
 {
   "mcpServers": {
     "sparrowdesk": {
-      "url": "https://mcp.campaignsparrow.com/mcp",
-      "headers": {
-        "Authorization": "Bearer <your_sparrowdesk_api_key>"
-      }
+      "type": "http",
+      "url": "https://mcp.sparrowdesk.com/mcp"
     }
   }
 }
@@ -103,20 +94,28 @@ curl https://mcp.campaignsparrow.com/health
 {
   "mcpServers": {
     "sparrowdesk": {
-      "url": "https://mcp.campaignsparrow.com/mcp",
-      "headers": {
-        "Authorization": "Bearer <your_sparrowdesk_api_key>"
-      }
+      "type": "http",
+      "url": "https://mcp.sparrowdesk.com/mcp"
     }
   }
 }
 ```
 
-### 3. Test a tool call directly
+Your MCP client will open a browser window to complete the OAuth login with your SparrowDesk account.
+
+### 3. Test the OAuth discovery endpoint
 
 ```bash
-curl -X POST https://mcp.campaignsparrow.com/mcp \
-  -H "Authorization: Bearer <your_sparrowdesk_api_key>" \
+curl https://mcp.sparrowdesk.com/.well-known/oauth-authorization-server
+```
+
+### 4. Test a tool call directly
+
+Once you have an OAuth access token, you can test tool calls directly:
+
+```bash
+curl -X POST https://mcp.sparrowdesk.com/mcp \
+  -H "Authorization: Bearer <your_oauth_access_token>" \
   -H "Content-Type: application/json" \
   -d '{
     "jsonrpc": "2.0",
@@ -126,11 +125,11 @@ curl -X POST https://mcp.campaignsparrow.com/mcp \
   }'
 ```
 
-### 4. Test a specific tool
+### 5. Test a specific tool
 
 ```bash
-curl -X POST https://mcp.campaignsparrow.com/mcp \
-  -H "Authorization: Bearer <your_sparrowdesk_api_key>" \
+curl -X POST https://mcp.sparrowdesk.com/mcp \
+  -H "Authorization: Bearer <your_oauth_access_token>" \
   -H "Content-Type: application/json" \
   -d '{
     "jsonrpc": "2.0",
@@ -152,6 +151,11 @@ curl -X POST https://mcp.campaignsparrow.com/mcp \
 | `get_conversation` | Retrieve a conversation by ID |
 | `list_conversations` | List conversations with optional filters |
 | `list_conversation_replies` | List replies for a conversation |
+| `add_conversation_reply` | Add a reply or internal note to a conversation |
+| `create_conversation` | Create a new conversation/ticket |
 | `get_contact` | Retrieve a contact by ID |
 | `create_contact` | Create a new contact |
 | `update_contact` | Update an existing contact |
+| `list_contact_fields` | List all contact fields |
+| `list_members` | List all team members |
+| `get_me` | Retrieve the currently authenticated member's profile |
