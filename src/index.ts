@@ -312,6 +312,26 @@ function createServer(authToken: string) {
   );
 
   server.registerTool(
+    "list_members",
+    {
+      description: "Retrieve a paginated list of all team members in the SparrowDesk account",
+      inputSchema: {
+        starting_after: z.string().optional().describe("Pagination cursor"),
+        per_page: z.number().int().min(1).max(100).optional().describe("Items per page (1-100, default 25)"),
+      },
+    },
+    async ({ starting_after, per_page }) => {
+      const params = new URLSearchParams();
+      if (starting_after) params.set("starting_after", starting_after);
+      if (per_page) params.set("per_page", String(per_page));
+      const query = params.toString() ? `?${params.toString()}` : "";
+      const result = await apiRequest(`${API_BASE}/members${query}`);
+      if (result.error) return { content: [{ type: "text", text: result.error }], isError: true };
+      return { content: [{ type: "text", text: JSON.stringify(result.data, null, 2) }] };
+    }
+  );
+
+  server.registerTool(
     "get_me",
     {
       description: "Retrieve the currently authenticated member's profile from SparrowDesk",
