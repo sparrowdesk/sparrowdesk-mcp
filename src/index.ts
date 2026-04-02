@@ -31,9 +31,23 @@ interface PendingCode {
 }
 const pendingAuth = new Map<string, PendingAuth>();
 const pendingCodes = new Map<string, PendingCode>();
+const validTokens = new Set<string>();
+
 function expireAfter(map: Map<string, unknown>, key: string, ms = 10 * 60 * 1000) {
   setTimeout(() => map.delete(key), ms);
 }
+
+const DEFAULT_SCOPE = [
+  "MANAGE_CONTACTS",
+  "VIEW_ALL_TICKETS",
+  "VIEW_CONTACTS",
+  "VIEW_OWN_TICKETS",
+  "EDIT_OWN_TICKETS",
+  "DELETE_OWN_TICKETS",
+  "VIEW_ALL_TAGS",
+  "EDIT_ALL_TICKETS",
+  "DELETE_ALL_TICKETS",
+].join(" ");
 
 
 function createServer(authToken: string) {
@@ -370,7 +384,9 @@ app.get("/.well-known/oauth-authorization-server", (_req, res) => {
 
 // Dynamic client registration (RFC 7591) — we proxy to SparrowDesk with a fixed app,
 // so we just issue a client_id and store the redirect_uris for later validation.
-app.post("/oauth/register", (req, res) => {
+const registeredClients = new Map<string, { redirectUris: string[] }>();
+
+app.post(["/oauth/register", "/mcp/oauth/register"], (req, res) => {
   const { redirect_uris, client_name } = req.body as { redirect_uris?: string[]; client_name?: string };
 
   if (!redirect_uris?.length) {
@@ -379,6 +395,8 @@ app.post("/oauth/register", (req, res) => {
   }
 
   const clientId = crypto.randomBytes(16).toString("hex");
+  registeredClients.set(clientId, { redirectUris: redirect_uris });
+  expireAfter(registeredClients as Map<string, unknown>, clientId, 24 * 60 * 60 * 1000);
   console.log(`OAuth client registered: ${client_name ?? "unknown"} (${clientId})`);
 
   res.status(201).json({
@@ -399,12 +417,17 @@ app.get("/.well-known/oauth-protected-resource", (_req, res) => {
   });
 });
 
-// Step 1: MCP client → this server → SparrowDesk
-app.get("/oauth/authorize", (req, res) => {
-  const { redirect_uri, state, code_challenge, code_challenge_method, scope } = req.query as Record<string, string>;
+app.get(["/oauth/authorize", "/mcp/oauth/authorize"], (req, res) => {
+  const { client_id, redirect_uri, state, code_challenge, code_challenge_method, scope } = req.query as Record<string, string>;
 
   if (!redirect_uri || !state) {
     res.status(400).json({ error: "invalid_request", error_description: "Missing redirect_uri or state" });
+    return;
+  }
+
+  const client = client_id ? registeredClients.get(client_id) : undefined;
+  if (client && !client.redirectUris.includes(redirect_uri)) {
+    res.status(400).json({ error: "invalid_request", error_description: "redirect_uri not registered for this client" });
     return;
   }
 
@@ -418,31 +441,18 @@ app.get("/oauth/authorize", (req, res) => {
   });
   expireAfter(pendingAuth, internalState);
 
-  const defaultScope = [
-    "MANAGE_CONTACTS",
-    "VIEW_ALL_TICKETS",
-    "VIEW_CONTACTS",
-    "VIEW_OWN_TICKETS",
-    "EDIT_OWN_TICKETS",
-    "DELETE_OWN_TICKETS",
-    "VIEW_ALL_TAGS",
-    "EDIT_ALL_TICKETS",
-    "DELETE_ALL_TICKETS",
-  ].join(" ");
-
   const params = new URLSearchParams({
     client_id: SD_CLIENT_ID,
     redirect_uri: `${MCP_PUBLIC_URL}/oauth/callback`,
     response_type: "code",
     state: internalState,
-    scope: scope || defaultScope,
+    scope: scope || DEFAULT_SCOPE,
   });
 
   res.redirect(`${SD_AUTHORIZE_URL}?${params.toString()}`);
 });
 
-// Step 2: SparrowDesk → this server (callback)
-app.get("/oauth/callback", async (req, res) => {
+app.get(["/oauth/callback", "/mcp/oauth/callback"], async (req, res) => {
   const { code, state, error } = req.query as Record<string, string>;
 
   if (error) {
@@ -491,8 +501,7 @@ app.get("/oauth/callback", async (req, res) => {
   res.redirect(redirectUrl.toString());
 });
 
-// Step 3: MCP client exchanges our code for token
-app.post("/oauth/token", (req, res) => {
+app.post(["/oauth/token", "/mcp/oauth/token"], (req, res) => {
   const { code, code_verifier, redirect_uri } = req.body as Record<string, string>;
 
   const pending = pendingCodes.get(code);
@@ -519,6 +528,8 @@ app.post("/oauth/token", (req, res) => {
   }
 
   pendingCodes.delete(code);
+  validTokens.add(pending.token);
+  setTimeout(() => validTokens.delete(pending.token), 24 * 60 * 60 * 1000);
   res.json({ access_token: pending.token, token_type: "Bearer" });
 });
 
@@ -526,11 +537,11 @@ app.all("/mcp", async (req, res) => {
   const authHeader = req.headers.authorization;
   const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
 
-  if (!token) {
+  if (!token || !validTokens.has(token)) {
     res
       .status(401)
       .set("WWW-Authenticate", `Bearer resource_metadata="${MCP_PUBLIC_URL}/.well-known/oauth-protected-resource"`)
-      .json({ error: "Authorization header with Bearer token is required" });
+      .json({ error: "Valid OAuth token required" });
     return;
   }
 
