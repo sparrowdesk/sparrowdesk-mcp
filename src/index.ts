@@ -25,16 +25,55 @@ interface PendingAuth {
 }
 interface PendingCode {
   token: string;
+  refreshToken: string;
+  expiresIn: number;
   clientRedirectUri: string;
   codeChallenge?: string;
   codeChallengeMethod?: string;
 }
+interface TokenSession {
+  sdToken: string;
+  refreshToken: string;
+  expiresAt: number; // ms epoch
+}
+
 const pendingAuth = new Map<string, PendingAuth>();
 const pendingCodes = new Map<string, PendingCode>();
-const validTokens = new Set<string>();
+const sessions = new Map<string, TokenSession>();
 
 function expireAfter(map: Map<string, unknown>, key: string, ms = 10 * 60 * 1000) {
   setTimeout(() => map.delete(key), ms);
+}
+
+async function refreshSession(mcpToken: string): Promise<TokenSession | null> {
+  const session = sessions.get(mcpToken);
+  if (!session) return null;
+  if (Date.now() < session.expiresAt) return session;
+
+  const tokenRes = await fetch(SD_TOKEN_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "refresh_token",
+      refresh_token: session.refreshToken,
+      client_id: SD_CLIENT_ID,
+      client_secret: SD_CLIENT_SECRET,
+    }).toString(),
+  });
+
+  if (!tokenRes.ok) {
+    sessions.delete(mcpToken);
+    return null;
+  }
+
+  const data = await tokenRes.json() as { access_token: string; refresh_token?: string; expires_in?: number };
+  const updated: TokenSession = {
+    sdToken: data.access_token,
+    refreshToken: data.refresh_token ?? session.refreshToken,
+    expiresAt: Date.now() + (data.expires_in ?? 3600) * 1000,
+  };
+  sessions.set(mcpToken, updated);
+  return updated;
 }
 
 const DEFAULT_SCOPE = [
@@ -485,10 +524,12 @@ app.get(["/oauth/callback", "/mcp/oauth/callback"], async (req, res) => {
     return;
   }
 
-  const tokenData = await tokenRes.json() as { access_token: string };
+  const tokenData = await tokenRes.json() as { access_token: string; refresh_token: string; expires_in?: number };
   const ourCode = crypto.randomBytes(16).toString("hex");
   pendingCodes.set(ourCode, {
     token: tokenData.access_token,
+    refreshToken: tokenData.refresh_token,
+    expiresIn: tokenData.expires_in ?? 3600,
     clientRedirectUri: pending.clientRedirectUri,
     codeChallenge: pending.codeChallenge,
     codeChallengeMethod: pending.codeChallengeMethod,
@@ -528,16 +569,21 @@ app.post(["/oauth/token", "/mcp/oauth/token"], (req, res) => {
   }
 
   pendingCodes.delete(code);
-  validTokens.add(pending.token);
-  setTimeout(() => validTokens.delete(pending.token), 24 * 60 * 60 * 1000);
-  res.json({ access_token: pending.token, token_type: "Bearer" });
+  const mcpToken = crypto.randomBytes(32).toString("hex");
+  sessions.set(mcpToken, {
+    sdToken: pending.token,
+    refreshToken: pending.refreshToken,
+    expiresAt: Date.now() + (pending.expiresIn ?? 3600) * 1000,
+  });
+  res.json({ access_token: mcpToken, token_type: "Bearer" });
 });
 
 app.all("/mcp", async (req, res) => {
   const authHeader = req.headers.authorization;
   const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
 
-  if (!token || !validTokens.has(token)) {
+  const session = token ? await refreshSession(token) : null;
+  if (!session) {
     res
       .status(401)
       .set("WWW-Authenticate", `Bearer resource_metadata="${MCP_PUBLIC_URL}/.well-known/oauth-protected-resource"`)
@@ -545,7 +591,7 @@ app.all("/mcp", async (req, res) => {
     return;
   }
 
-  const server = createServer(token);
+  const server = createServer(session.sdToken);
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
   await server.connect(transport);
   await transport.handleRequest(req, res, req.body);
