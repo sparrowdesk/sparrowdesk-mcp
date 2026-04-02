@@ -425,7 +425,7 @@ app.get("/.well-known/oauth-authorization-server", (_req, res) => {
 // so we just issue a client_id and store the redirect_uris for later validation.
 const registeredClients = new Map<string, { redirectUris: string[] }>();
 
-app.post(["/oauth/register", "/mcp/oauth/register"], (req, res) => {
+app.post(["/register", "/oauth/register", "/mcp/oauth/register"], (req, res) => {
   const { redirect_uris, client_name } = req.body as { redirect_uris?: string[]; client_name?: string };
 
   if (!redirect_uris?.length) {
