@@ -86,6 +86,7 @@ const DEFAULT_SCOPE = [
   "VIEW_ALL_TAGS",
   "EDIT_ALL_TICKETS",
   "DELETE_ALL_TICKETS",
+  "VIEW_MEMBERS",
 ].join(" ");
 
 
