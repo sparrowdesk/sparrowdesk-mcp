@@ -7,6 +7,7 @@ import { z } from "zod";
 const API_BASE = (process.env.SPARROWDESK_API_BASE ?? "https://api.sparrowdesk.com/v1").replace(/\/$/, "");
 const parsedPort = parseInt(process.env.PORT ?? "");
 const PORT = Number.isNaN(parsedPort) ? 3000 : parsedPort;
+const STATE_SECRET = process.env.STATE_SECRET ?? crypto.randomBytes(32).toString("hex");
 
 const MCP_PUBLIC_URL = (process.env.MCP_PUBLIC_URL ?? "https://mcp.campaignsparrow.com").replace(/\/$/, "");
 const SD_OAUTH_ISSUER = (process.env.SPARROWDESK_OAUTH_ISSUER ?? "").replace(/\/$/, "");
@@ -15,7 +16,35 @@ const SD_TOKEN_URL = process.env.SPARROWDESK_OAUTH_TOKEN_URL ?? `${SD_OAUTH_ISSU
 const SD_CLIENT_ID = process.env.SPARROWDESK_CLIENT_ID ?? "";
 const SD_CLIENT_SECRET = process.env.SPARROWDESK_CLIENT_SECRET ?? "";
 
-// In-memory OAuth state — acceptable for single-instance deployment
+const STATE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
+function signState(data: PendingAuth): string {
+  const payload = Buffer.from(JSON.stringify({ ...data, exp: Date.now() + STATE_TTL_MS })).toString("base64url");
+  const sig = crypto.createHmac("sha256", STATE_SECRET).update(payload).digest("base64url");
+  return `${payload}.${sig}`;
+}
+
+function verifyState(token: string): PendingAuth | null {
+  const dot = token.lastIndexOf(".");
+  if (dot === -1) return null;
+  const payload = token.slice(0, dot);
+  const sig = token.slice(dot + 1);
+  const expectedBuf = crypto.createHmac("sha256", STATE_SECRET).update(payload).digest();
+  const sigBuf = Buffer.from(sig, "base64url");
+  // Fix: timingSafeEqual throws if lengths differ — check first
+  if (sigBuf.length !== expectedBuf.length) return null;
+  if (!crypto.timingSafeEqual(sigBuf, expectedBuf)) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(payload, "base64url").toString()) as PendingAuth & { exp?: number };
+    if (parsed.exp !== undefined && Date.now() > parsed.exp) return null;
+    const { exp: _exp, ...rest } = parsed;
+    return rest;
+  } catch {
+    return null;
+  }
+}
+
+// OAuth state stored as signed tokens in the state parameter — works across multiple instances
 interface PendingAuth {
   clientRedirectUri: string;
   clientState: string;
@@ -37,12 +66,22 @@ interface TokenSession {
   expiresAt: number; // ms epoch
 }
 
-const pendingAuth = new Map<string, PendingAuth>();
 const pendingCodes = new Map<string, PendingCode>();
 const sessions = new Map<string, TokenSession>();
+const sessionTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 function expireAfter(map: Map<string, unknown>, key: string, ms = 10 * 60 * 1000) {
   setTimeout(() => map.delete(key), ms);
+}
+
+function setSessionExpiry(mcpToken: string, ms: number) {
+  const existing = sessionTimers.get(mcpToken);
+  if (existing) clearTimeout(existing);
+  const handle = setTimeout(() => {
+    sessions.delete(mcpToken);
+    sessionTimers.delete(mcpToken);
+  }, ms);
+  sessionTimers.set(mcpToken, handle);
 }
 
 async function refreshSession(mcpToken: string): Promise<TokenSession | null> {
@@ -67,12 +106,14 @@ async function refreshSession(mcpToken: string): Promise<TokenSession | null> {
   }
 
   const data = await tokenRes.json() as { access_token: string; refresh_token?: string; expires_in?: number };
+  const expiresIn = (data.expires_in ?? 3600) * 1000;
   const updated: TokenSession = {
     sdToken: data.access_token,
     refreshToken: data.refresh_token ?? session.refreshToken,
-    expiresAt: Date.now() + (data.expires_in ?? 3600) * 1000,
+    expiresAt: Date.now() + expiresIn,
   };
   sessions.set(mcpToken, updated);
+  setSessionExpiry(mcpToken, expiresIn);
   return updated;
 }
 
@@ -466,20 +507,27 @@ app.get(["/oauth/authorize", "/mcp/oauth/authorize"], (req, res) => {
   }
 
   const client = client_id ? registeredClients.get(client_id) : undefined;
-  if (client && !client.redirectUris.includes(redirect_uri)) {
+  if (!client) {
+    res.status(400).json({ error: "invalid_client", error_description: "Unknown or missing client_id" });
+    return;
+  }
+  if (!client.redirectUris.includes(redirect_uri)) {
     res.status(400).json({ error: "invalid_request", error_description: "redirect_uri not registered for this client" });
     return;
   }
 
-  const internalState = crypto.randomBytes(16).toString("hex");
-  pendingAuth.set(internalState, {
+  if (!code_challenge) {
+    res.status(400).json({ error: "invalid_request", error_description: "code_challenge required (S256)" });
+    return;
+  }
+
+  const internalState = signState({
     clientRedirectUri: redirect_uri,
     clientState: state,
     codeChallenge: code_challenge,
     codeChallengeMethod: code_challenge_method,
     scope,
   });
-  expireAfter(pendingAuth, internalState);
 
   const params = new URLSearchParams({
     client_id: SD_CLIENT_ID,
@@ -496,16 +544,15 @@ app.get(["/oauth/callback", "/mcp/oauth/callback"], async (req, res) => {
   const { code, state, error } = req.query as Record<string, string>;
 
   if (error) {
-    res.status(400).send(`OAuth error: ${error}`);
+    res.status(400).json({ error: "oauth_error", error_description: error });
     return;
   }
 
-  const pending = pendingAuth.get(state);
+  const pending = verifyState(state);
   if (!pending) {
     res.status(400).json({ error: "invalid_request", error_description: "Invalid or expired state" });
     return;
   }
-  pendingAuth.delete(state);
 
   const tokenRes = await fetch(SD_TOKEN_URL, {
     method: "POST",
@@ -520,8 +567,8 @@ app.get(["/oauth/callback", "/mcp/oauth/callback"], async (req, res) => {
   });
 
   if (!tokenRes.ok) {
-    const text = await tokenRes.text();
-    res.status(502).send(`Token exchange failed: ${text}`);
+    console.error("Token exchange failed:", tokenRes.status, await tokenRes.text());
+    res.status(502).json({ error: "server_error", error_description: "Token exchange failed" });
     return;
   }
 
@@ -595,11 +642,13 @@ app.post(["/oauth/token", "/mcp/oauth/token"], (req, res) => {
 
   pendingCodes.delete(code);
   const mcpToken = crypto.randomBytes(32).toString("hex");
+  const expiresInMs = (pending.expiresIn ?? 3600) * 1000;
   sessions.set(mcpToken, {
     sdToken: pending.token,
     refreshToken: pending.refreshToken,
-    expiresAt: Date.now() + (pending.expiresIn ?? 3600) * 1000,
+    expiresAt: Date.now() + expiresInMs,
   });
+  setSessionExpiry(mcpToken, expiresInMs);
   res.json({ access_token: mcpToken, token_type: "Bearer" });
 });
 
