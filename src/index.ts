@@ -7,7 +7,6 @@ import { z } from "zod";
 const API_BASE = (process.env.SPARROWDESK_API_BASE ?? "https://api.sparrowdesk.com/v1").replace(/\/$/, "");
 const parsedPort = parseInt(process.env.PORT ?? "");
 const PORT = Number.isNaN(parsedPort) ? 3000 : parsedPort;
-const STATE_SECRET = process.env.STATE_SECRET ?? crypto.randomBytes(32).toString("hex");
 
 const MCP_PUBLIC_URL = (process.env.MCP_PUBLIC_URL ?? "https://mcp.campaignsparrow.com").replace(/\/$/, "");
 const SD_OAUTH_ISSUER = (process.env.SPARROWDESK_OAUTH_ISSUER ?? "").replace(/\/$/, "");
@@ -16,35 +15,7 @@ const SD_TOKEN_URL = process.env.SPARROWDESK_OAUTH_TOKEN_URL ?? `${SD_OAUTH_ISSU
 const SD_CLIENT_ID = process.env.SPARROWDESK_CLIENT_ID ?? "";
 const SD_CLIENT_SECRET = process.env.SPARROWDESK_CLIENT_SECRET ?? "";
 
-const STATE_TTL_MS = 10 * 60 * 1000; // 10 minutes
-
-function signState(data: PendingAuth): string {
-  const payload = Buffer.from(JSON.stringify({ ...data, exp: Date.now() + STATE_TTL_MS })).toString("base64url");
-  const sig = crypto.createHmac("sha256", STATE_SECRET).update(payload).digest("base64url");
-  return `${payload}.${sig}`;
-}
-
-function verifyState(token: string): PendingAuth | null {
-  const dot = token.lastIndexOf(".");
-  if (dot === -1) return null;
-  const payload = token.slice(0, dot);
-  const sig = token.slice(dot + 1);
-  const expectedBuf = crypto.createHmac("sha256", STATE_SECRET).update(payload).digest();
-  const sigBuf = Buffer.from(sig, "base64url");
-  // Fix: timingSafeEqual throws if lengths differ — check first
-  if (sigBuf.length !== expectedBuf.length) return null;
-  if (!crypto.timingSafeEqual(sigBuf, expectedBuf)) return null;
-  try {
-    const parsed = JSON.parse(Buffer.from(payload, "base64url").toString()) as PendingAuth & { exp?: number };
-    if (parsed.exp !== undefined && Date.now() > parsed.exp) return null;
-    const { exp: _exp, ...rest } = parsed;
-    return rest;
-  } catch {
-    return null;
-  }
-}
-
-// OAuth state stored as signed tokens in the state parameter — works across multiple instances
+// In-memory OAuth state — acceptable for single-instance deployment
 interface PendingAuth {
   clientRedirectUri: string;
   clientState: string;
@@ -66,22 +37,12 @@ interface TokenSession {
   expiresAt: number; // ms epoch
 }
 
+const pendingAuth = new Map<string, PendingAuth>();
 const pendingCodes = new Map<string, PendingCode>();
 const sessions = new Map<string, TokenSession>();
-const sessionTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 function expireAfter(map: Map<string, unknown>, key: string, ms = 10 * 60 * 1000) {
   setTimeout(() => map.delete(key), ms);
-}
-
-function setSessionExpiry(mcpToken: string, ms: number) {
-  const existing = sessionTimers.get(mcpToken);
-  if (existing) clearTimeout(existing);
-  const handle = setTimeout(() => {
-    sessions.delete(mcpToken);
-    sessionTimers.delete(mcpToken);
-  }, ms);
-  sessionTimers.set(mcpToken, handle);
 }
 
 async function refreshSession(mcpToken: string): Promise<TokenSession | null> {
@@ -106,14 +67,12 @@ async function refreshSession(mcpToken: string): Promise<TokenSession | null> {
   }
 
   const data = await tokenRes.json() as { access_token: string; refresh_token?: string; expires_in?: number };
-  const expiresIn = (data.expires_in ?? 3600) * 1000;
   const updated: TokenSession = {
     sdToken: data.access_token,
     refreshToken: data.refresh_token ?? session.refreshToken,
-    expiresAt: Date.now() + expiresIn,
+    expiresAt: Date.now() + (data.expires_in ?? 3600) * 1000,
   };
   sessions.set(mcpToken, updated);
-  setSessionExpiry(mcpToken, expiresIn);
   return updated;
 }
 
@@ -127,7 +86,6 @@ const DEFAULT_SCOPE = [
   "VIEW_ALL_TAGS",
   "EDIT_ALL_TICKETS",
   "DELETE_ALL_TICKETS",
-  "VIEW_MEMBERS",
 ].join(" ");
 
 
@@ -463,41 +421,11 @@ app.get("/.well-known/oauth-authorization-server", (_req, res) => {
   });
 });
 
-// Dynamic client registration (RFC 7591) — client_id is a signed token encoding the
-// redirect_uris so no server-side storage is needed (survives restarts and multi-instance).
-function signClient(redirectUris: string[]): string {
-  const payload = Buffer.from(JSON.stringify({ redirectUris })).toString("base64url");
-  const sig = crypto.createHmac("sha256", STATE_SECRET).update(payload).digest("base64url");
-  return `${payload}.${sig}`;
-}
+// Dynamic client registration (RFC 7591) — we proxy to SparrowDesk with a fixed app,
+// so we just issue a client_id and store the redirect_uris for later validation.
+const registeredClients = new Map<string, { redirectUris: string[] }>();
 
-function verifyClient(clientId: string): { redirectUris: string[] } | null {
-  const dot = clientId.lastIndexOf(".");
-  if (dot === -1) {
-    console.error("verifyClient: no dot separator — likely old-format hex client_id");
-    return null;
-  }
-  const payload = clientId.slice(0, dot);
-  const sig = clientId.slice(dot + 1);
-  const expectedBuf = crypto.createHmac("sha256", STATE_SECRET).update(payload).digest();
-  const sigBuf = Buffer.from(sig, "base64url");
-  if (sigBuf.length !== expectedBuf.length) {
-    console.error(`verifyClient: sig length mismatch (got ${sigBuf.length}, expected ${expectedBuf.length})`);
-    return null;
-  }
-  if (!crypto.timingSafeEqual(sigBuf, expectedBuf)) {
-    console.error("verifyClient: HMAC signature mismatch — STATE_SECRET likely differs between registration and this request");
-    return null;
-  }
-  try {
-    return JSON.parse(Buffer.from(payload, "base64url").toString()) as { redirectUris: string[] };
-  } catch {
-    console.error("verifyClient: payload JSON parse failed");
-    return null;
-  }
-}
-
-app.post(["/register", "/oauth/register", "/mcp/oauth/register"], (req, res) => {
+app.post(["/oauth/register", "/mcp/oauth/register"], (req, res) => {
   const { redirect_uris, client_name } = req.body as { redirect_uris?: string[]; client_name?: string };
 
   if (!redirect_uris?.length) {
@@ -505,23 +433,10 @@ app.post(["/register", "/oauth/register", "/mcp/oauth/register"], (req, res) => 
     return;
   }
 
-  // Spec: redirect URIs MUST be localhost or HTTPS
-  const invalidUris = redirect_uris.filter((uri) => {
-    try {
-      const parsed = new URL(uri);
-      const isLoopback = parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1" || parsed.hostname === "::1";
-      return !isLoopback && parsed.protocol !== "https:";
-    } catch {
-      return true;
-    }
-  });
-  if (invalidUris.length > 0) {
-    res.status(400).json({ error: "invalid_redirect_uri", error_description: "Redirect URIs must be localhost or HTTPS" });
-    return;
-  }
-
-  const clientId = signClient(redirect_uris);
-  console.log(`OAuth client registered: ${client_name ?? "unknown"} — client_id prefix: ${clientId.slice(0, 40)}`);
+  const clientId = crypto.randomBytes(16).toString("hex");
+  registeredClients.set(clientId, { redirectUris: redirect_uris });
+  expireAfter(registeredClients as Map<string, unknown>, clientId, 24 * 60 * 60 * 1000);
+  console.log(`OAuth client registered: ${client_name ?? "unknown"} (${clientId})`);
 
   res.status(201).json({
     client_id: clientId,
@@ -541,7 +456,7 @@ app.get("/.well-known/oauth-protected-resource", (_req, res) => {
   });
 });
 
-app.get(["/authorize", "/oauth/authorize", "/mcp/oauth/authorize"], (req, res) => {
+app.get(["/oauth/authorize", "/mcp/oauth/authorize"], (req, res) => {
   const { client_id, redirect_uri, state, code_challenge, code_challenge_method, scope } = req.query as Record<string, string>;
 
   if (!redirect_uri || !state) {
@@ -549,29 +464,21 @@ app.get(["/authorize", "/oauth/authorize", "/mcp/oauth/authorize"], (req, res) =
     return;
   }
 
-  const client = client_id ? verifyClient(client_id) : undefined;
-  if (!client) {
-    console.error(`authorize: invalid client_id (len=${client_id?.length ?? 0}): ${client_id?.slice(0, 40)}...`);
-    res.status(400).json({ error: "invalid_client", error_description: "Unknown or missing client_id" });
-    return;
-  }
-  if (!client.redirectUris.includes(redirect_uri)) {
+  const client = client_id ? registeredClients.get(client_id) : undefined;
+  if (client && !client.redirectUris.includes(redirect_uri)) {
     res.status(400).json({ error: "invalid_request", error_description: "redirect_uri not registered for this client" });
     return;
   }
 
-  if (!code_challenge) {
-    res.status(400).json({ error: "invalid_request", error_description: "code_challenge required (S256)" });
-    return;
-  }
-
-  const internalState = signState({
+  const internalState = crypto.randomBytes(16).toString("hex");
+  pendingAuth.set(internalState, {
     clientRedirectUri: redirect_uri,
     clientState: state,
     codeChallenge: code_challenge,
     codeChallengeMethod: code_challenge_method,
     scope,
   });
+  expireAfter(pendingAuth, internalState);
 
   const params = new URLSearchParams({
     client_id: SD_CLIENT_ID,
@@ -588,15 +495,16 @@ app.get(["/oauth/callback", "/mcp/oauth/callback"], async (req, res) => {
   const { code, state, error } = req.query as Record<string, string>;
 
   if (error) {
-    res.status(400).json({ error: "oauth_error", error_description: error });
+    res.status(400).send(`OAuth error: ${error}`);
     return;
   }
 
-  const pending = verifyState(state);
+  const pending = pendingAuth.get(state);
   if (!pending) {
     res.status(400).json({ error: "invalid_request", error_description: "Invalid or expired state" });
     return;
   }
+  pendingAuth.delete(state);
 
   const tokenRes = await fetch(SD_TOKEN_URL, {
     method: "POST",
@@ -611,8 +519,8 @@ app.get(["/oauth/callback", "/mcp/oauth/callback"], async (req, res) => {
   });
 
   if (!tokenRes.ok) {
-    console.error("Token exchange failed:", tokenRes.status, await tokenRes.text());
-    res.status(502).json({ error: "server_error", error_description: "Token exchange failed" });
+    const text = await tokenRes.text();
+    res.status(502).send(`Token exchange failed: ${text}`);
     return;
   }
 
@@ -631,34 +539,10 @@ app.get(["/oauth/callback", "/mcp/oauth/callback"], async (req, res) => {
   const redirectUrl = new URL(pending.clientRedirectUri);
   redirectUrl.searchParams.set("code", ourCode);
   redirectUrl.searchParams.set("state", pending.clientState);
-  const appUrl = redirectUrl.toString();
-  res.send(`<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <title>Connected to SparrowDesk</title>
-  <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; background: #f5f5f5; }
-    .card { background: white; border-radius: 12px; padding: 48px 40px; text-align: center; max-width: 400px; box-shadow: 0 2px 16px rgba(0,0,0,0.08); }
-    .icon { font-size: 48px; margin-bottom: 16px; }
-    h1 { font-size: 22px; margin: 0 0 8px; color: #111; }
-    p { color: #555; margin: 0 0 24px; line-height: 1.5; }
-    a { display: inline-block; padding: 10px 20px; background: #0e7a6e; color: white; border-radius: 8px; text-decoration: none; font-size: 14px; }
-  </style>
-</head>
-<body>
-  <div class="card">
-    <div class="icon">&#10003;</div>
-    <h1>Authorization successful</h1>
-    <p>SparrowDesk is now connected. You can close this tab and return to your app.</p>
-    <a href="${appUrl}">Return to app</a>
-  </div>
-  <script>window.location.href = ${JSON.stringify(appUrl)};</script>
-</body>
-</html>`);
+  res.redirect(redirectUrl.toString());
 });
 
-app.post(["/token", "/oauth/token", "/mcp/oauth/token"], (req, res) => {
+app.post(["/oauth/token", "/mcp/oauth/token"], (req, res) => {
   const { code, code_verifier, redirect_uri } = req.body as Record<string, string>;
 
   const pending = pendingCodes.get(code);
@@ -686,14 +570,12 @@ app.post(["/token", "/oauth/token", "/mcp/oauth/token"], (req, res) => {
 
   pendingCodes.delete(code);
   const mcpToken = crypto.randomBytes(32).toString("hex");
-  const expiresInMs = (pending.expiresIn ?? 3600) * 1000;
   sessions.set(mcpToken, {
     sdToken: pending.token,
     refreshToken: pending.refreshToken,
-    expiresAt: Date.now() + expiresInMs,
+    expiresAt: Date.now() + (pending.expiresIn ?? 3600) * 1000,
   });
-  setSessionExpiry(mcpToken, expiresInMs);
-  res.json({ access_token: mcpToken, token_type: "Bearer", expires_in: pending.expiresIn ?? 3600 });
+  res.json({ access_token: mcpToken, token_type: "Bearer" });
 });
 
 app.all("/mcp", async (req, res) => {
