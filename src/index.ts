@@ -463,9 +463,29 @@ app.get("/.well-known/oauth-authorization-server", (_req, res) => {
   });
 });
 
-// Dynamic client registration (RFC 7591) — we proxy to SparrowDesk with a fixed app,
-// so we just issue a client_id and store the redirect_uris for later validation.
-const registeredClients = new Map<string, { redirectUris: string[] }>();
+// Dynamic client registration (RFC 7591) — client_id is a signed token encoding the
+// redirect_uris so no server-side storage is needed (survives restarts and multi-instance).
+function signClient(redirectUris: string[]): string {
+  const payload = Buffer.from(JSON.stringify({ redirectUris })).toString("base64url");
+  const sig = crypto.createHmac("sha256", STATE_SECRET).update(payload).digest("base64url");
+  return `${payload}.${sig}`;
+}
+
+function verifyClient(clientId: string): { redirectUris: string[] } | null {
+  const dot = clientId.lastIndexOf(".");
+  if (dot === -1) return null;
+  const payload = clientId.slice(0, dot);
+  const sig = clientId.slice(dot + 1);
+  const expectedBuf = crypto.createHmac("sha256", STATE_SECRET).update(payload).digest();
+  const sigBuf = Buffer.from(sig, "base64url");
+  if (sigBuf.length !== expectedBuf.length) return null;
+  if (!crypto.timingSafeEqual(sigBuf, expectedBuf)) return null;
+  try {
+    return JSON.parse(Buffer.from(payload, "base64url").toString()) as { redirectUris: string[] };
+  } catch {
+    return null;
+  }
+}
 
 app.post(["/register", "/oauth/register", "/mcp/oauth/register"], (req, res) => {
   const { redirect_uris, client_name } = req.body as { redirect_uris?: string[]; client_name?: string };
@@ -475,10 +495,8 @@ app.post(["/register", "/oauth/register", "/mcp/oauth/register"], (req, res) => 
     return;
   }
 
-  const clientId = crypto.randomBytes(16).toString("hex");
-  registeredClients.set(clientId, { redirectUris: redirect_uris });
-  expireAfter(registeredClients as Map<string, unknown>, clientId, 24 * 60 * 60 * 1000);
-  console.log(`OAuth client registered: ${client_name ?? "unknown"} (${clientId})`);
+  const clientId = signClient(redirect_uris);
+  console.log(`OAuth client registered: ${client_name ?? "unknown"}`);
 
   res.status(201).json({
     client_id: clientId,
@@ -506,7 +524,7 @@ app.get(["/oauth/authorize", "/mcp/oauth/authorize"], (req, res) => {
     return;
   }
 
-  const client = client_id ? registeredClients.get(client_id) : undefined;
+  const client = client_id ? verifyClient(client_id) : undefined;
   if (!client) {
     res.status(400).json({ error: "invalid_client", error_description: "Unknown or missing client_id" });
     return;
