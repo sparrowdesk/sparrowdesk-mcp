@@ -473,16 +473,26 @@ function signClient(redirectUris: string[]): string {
 
 function verifyClient(clientId: string): { redirectUris: string[] } | null {
   const dot = clientId.lastIndexOf(".");
-  if (dot === -1) return null;
+  if (dot === -1) {
+    console.error("verifyClient: no dot separator — likely old-format hex client_id");
+    return null;
+  }
   const payload = clientId.slice(0, dot);
   const sig = clientId.slice(dot + 1);
   const expectedBuf = crypto.createHmac("sha256", STATE_SECRET).update(payload).digest();
   const sigBuf = Buffer.from(sig, "base64url");
-  if (sigBuf.length !== expectedBuf.length) return null;
-  if (!crypto.timingSafeEqual(sigBuf, expectedBuf)) return null;
+  if (sigBuf.length !== expectedBuf.length) {
+    console.error(`verifyClient: sig length mismatch (got ${sigBuf.length}, expected ${expectedBuf.length})`);
+    return null;
+  }
+  if (!crypto.timingSafeEqual(sigBuf, expectedBuf)) {
+    console.error("verifyClient: HMAC signature mismatch — STATE_SECRET likely differs between registration and this request");
+    return null;
+  }
   try {
     return JSON.parse(Buffer.from(payload, "base64url").toString()) as { redirectUris: string[] };
   } catch {
+    console.error("verifyClient: payload JSON parse failed");
     return null;
   }
 }
@@ -495,8 +505,23 @@ app.post(["/register", "/oauth/register", "/mcp/oauth/register"], (req, res) => 
     return;
   }
 
+  // Spec: redirect URIs MUST be localhost or HTTPS
+  const invalidUris = redirect_uris.filter((uri) => {
+    try {
+      const parsed = new URL(uri);
+      const isLoopback = parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1" || parsed.hostname === "::1";
+      return !isLoopback && parsed.protocol !== "https:";
+    } catch {
+      return true;
+    }
+  });
+  if (invalidUris.length > 0) {
+    res.status(400).json({ error: "invalid_redirect_uri", error_description: "Redirect URIs must be localhost or HTTPS" });
+    return;
+  }
+
   const clientId = signClient(redirect_uris);
-  console.log(`OAuth client registered: ${client_name ?? "unknown"}`);
+  console.log(`OAuth client registered: ${client_name ?? "unknown"} — client_id prefix: ${clientId.slice(0, 40)}`);
 
   res.status(201).json({
     client_id: clientId,
@@ -516,7 +541,7 @@ app.get("/.well-known/oauth-protected-resource", (_req, res) => {
   });
 });
 
-app.get(["/oauth/authorize", "/mcp/oauth/authorize"], (req, res) => {
+app.get(["/authorize", "/oauth/authorize", "/mcp/oauth/authorize"], (req, res) => {
   const { client_id, redirect_uri, state, code_challenge, code_challenge_method, scope } = req.query as Record<string, string>;
 
   if (!redirect_uri || !state) {
@@ -526,6 +551,7 @@ app.get(["/oauth/authorize", "/mcp/oauth/authorize"], (req, res) => {
 
   const client = client_id ? verifyClient(client_id) : undefined;
   if (!client) {
+    console.error(`authorize: invalid client_id (len=${client_id?.length ?? 0}): ${client_id?.slice(0, 40)}...`);
     res.status(400).json({ error: "invalid_client", error_description: "Unknown or missing client_id" });
     return;
   }
@@ -632,7 +658,7 @@ app.get(["/oauth/callback", "/mcp/oauth/callback"], async (req, res) => {
 </html>`);
 });
 
-app.post(["/oauth/token", "/mcp/oauth/token"], (req, res) => {
+app.post(["/token", "/oauth/token", "/mcp/oauth/token"], (req, res) => {
   const { code, code_verifier, redirect_uri } = req.body as Record<string, string>;
 
   const pending = pendingCodes.get(code);
@@ -667,7 +693,7 @@ app.post(["/oauth/token", "/mcp/oauth/token"], (req, res) => {
     expiresAt: Date.now() + expiresInMs,
   });
   setSessionExpiry(mcpToken, expiresInMs);
-  res.json({ access_token: mcpToken, token_type: "Bearer" });
+  res.json({ access_token: mcpToken, token_type: "Bearer", expires_in: pending.expiresIn ?? 3600 });
 });
 
 app.all("/mcp", async (req, res) => {
