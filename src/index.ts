@@ -1,8 +1,35 @@
 import crypto from "crypto";
 import express from "express";
+import { rateLimit } from "express-rate-limit";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
+
+// ---------------------------------------------------------------------------
+// Startup validation — fail fast if required config is missing
+// ---------------------------------------------------------------------------
+const REQUIRED_ENV = [
+  "SPARROWDESK_CLIENT_ID",
+  "SPARROWDESK_CLIENT_SECRET",
+  "SPARROWDESK_OAUTH_ISSUER",
+];
+for (const key of REQUIRED_ENV) {
+  if (!process.env[key]) {
+    console.error(`[startup] Missing required environment variable: ${key}`);
+    process.exit(1);
+  }
+}
+
+// Log resolved config at startup so prod/staging differences are immediately visible in logs
+console.log("[startup] Config:", JSON.stringify({
+  API_BASE: process.env.SPARROWDESK_API_BASE ?? "(default)",
+  MCP_PUBLIC_URL: process.env.MCP_PUBLIC_URL ?? "(default)",
+  SD_OAUTH_ISSUER: process.env.SPARROWDESK_OAUTH_ISSUER,
+  SD_AUTHORIZE_URL: process.env.SPARROWDESK_OAUTH_AUTHORIZE_URL ?? "(derived)",
+  SD_TOKEN_URL: process.env.SPARROWDESK_OAUTH_TOKEN_URL ?? "(derived)",
+  SD_CLIENT_ID: process.env.SPARROWDESK_CLIENT_ID,
+  PORT: process.env.PORT ?? "(default 3000)",
+}));
 
 const API_BASE = (process.env.SPARROWDESK_API_BASE ?? "https://api.sparrowdesk.com/v1").replace(/\/$/, "");
 const parsedPort = parseInt(process.env.PORT ?? "");
@@ -12,10 +39,34 @@ const MCP_PUBLIC_URL = (process.env.MCP_PUBLIC_URL ?? "https://mcp.campaignsparr
 const SD_OAUTH_ISSUER = (process.env.SPARROWDESK_OAUTH_ISSUER ?? "").replace(/\/$/, "");
 const SD_AUTHORIZE_URL = process.env.SPARROWDESK_OAUTH_AUTHORIZE_URL ?? `${SD_OAUTH_ISSUER}/oauth/authorize`;
 const SD_TOKEN_URL = process.env.SPARROWDESK_OAUTH_TOKEN_URL ?? `${SD_OAUTH_ISSUER}/oauth/token`;
-const SD_CLIENT_ID = process.env.SPARROWDESK_CLIENT_ID ?? "";
-const SD_CLIENT_SECRET = process.env.SPARROWDESK_CLIENT_SECRET ?? "";
+const SD_CLIENT_ID = process.env.SPARROWDESK_CLIENT_ID!;
+const SD_CLIENT_SECRET = process.env.SPARROWDESK_CLIENT_SECRET!;
 
+// Origins allowed to call the /mcp endpoint from a browser context.
+// Non-browser MCP clients (Claude Desktop, Cursor, etc.) send no Origin header
+// and are allowed through. Browser-originated requests must match this list.
+const ALLOWED_ORIGINS = new Set([
+  MCP_PUBLIC_URL,
+  "http://localhost:3000",
+]);
+
+// Supported MCP protocol versions
+const SUPPORTED_PROTOCOL_VERSIONS = new Set(["2025-06-18", "2025-03-26"]);
+
+// Known OAuth error codes — only forward these to avoid reflecting attacker input
+const KNOWN_OAUTH_ERRORS = new Set([
+  "access_denied",
+  "server_error",
+  "temporarily_unavailable",
+  "invalid_request",
+  "invalid_scope",
+  "unauthorized_client",
+  "unsupported_response_type",
+]);
+
+// ---------------------------------------------------------------------------
 // In-memory OAuth state — acceptable for single-instance deployment
+// ---------------------------------------------------------------------------
 interface PendingAuth {
   clientRedirectUri: string;
   clientState: string;
@@ -40,15 +91,31 @@ interface TokenSession {
 const pendingAuth = new Map<string, PendingAuth>();
 const pendingCodes = new Map<string, PendingCode>();
 const sessions = new Map<string, TokenSession>();
+const registeredClients = new Map<string, { redirectUris: string[] }>();
+
+// Max sizes to prevent memory-exhaustion DoS
+const MAX_REGISTERED_CLIENTS = 1000;
+const MAX_PENDING_AUTH = 1000;
+const MAX_PENDING_CODES = 1000;
+const MAX_SESSIONS = 10000;
 
 function expireAfter(map: Map<string, unknown>, key: string, ms = 10 * 60 * 1000) {
   setTimeout(() => map.delete(key), ms);
 }
 
 async function refreshSession(mcpToken: string): Promise<TokenSession | null> {
+  const hint = mcpToken.slice(0, 8);
   const session = sessions.get(mcpToken);
-  if (!session) return null;
-  if (Date.now() < session.expiresAt) return session;
+  if (!session) {
+    console.warn(`[session] token=${hint} not found in sessions map (size=${sessions.size})`);
+    return null;
+  }
+  if (Date.now() < session.expiresAt) {
+    return session;
+  }
+
+  const ttlLeft = session.expiresAt - Date.now();
+  console.log(`[session] token=${hint} expired (ttl=${ttlLeft}ms), attempting refresh`);
 
   const tokenRes = await fetch(SD_TOKEN_URL, {
     method: "POST",
@@ -62,6 +129,8 @@ async function refreshSession(mcpToken: string): Promise<TokenSession | null> {
   });
 
   if (!tokenRes.ok) {
+    const body = await tokenRes.text();
+    console.error(`[session] token=${hint} refresh failed status=${tokenRes.status} body=${body}`);
     sessions.delete(mcpToken);
     return null;
   }
@@ -73,6 +142,7 @@ async function refreshSession(mcpToken: string): Promise<TokenSession | null> {
     expiresAt: Date.now() + (data.expires_in ?? 3600) * 1000,
   };
   sessions.set(mcpToken, updated);
+  console.log(`[session] token=${hint} refreshed ok expires_in=${data.expires_in ?? 3600}s`);
   return updated;
 }
 
@@ -88,20 +158,27 @@ const DEFAULT_SCOPE = [
   "DELETE_ALL_TICKETS",
 ].join(" ");
 
+const ALLOWED_SCOPES = new Set(DEFAULT_SCOPE.split(" "));
 
-function createServer(authToken: string) {
+// ---------------------------------------------------------------------------
+// MCP server factory
+// ---------------------------------------------------------------------------
+function createServer(authToken: string, sessionHint: string) {
   const server = new McpServer({
     name: "sparrowdesk",
     version: "1.0.0",
   });
 
   async function apiRequest(url: string, options?: { method?: string; body?: unknown }) {
+    const method = options?.method ?? "GET";
+    console.log(JSON.stringify({ event: "api_call", session: sessionHint, method, url }));
+
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 10_000);
 
     try {
       const response = await fetch(url, {
-        method: options?.method ?? "GET",
+        method,
         headers: {
           Authorization: `Bearer ${authToken}`,
           "Content-Type": "application/json",
@@ -235,16 +312,19 @@ function createServer(authToken: string) {
       inputSchema: {
         subject: z.string().describe("Conversation subject"),
         description: z.string().describe("Conversation description"),
-        requested_by: z.string().describe("Email or phone number of the requester"),
+        requested_by: z.union([
+          z.string().email(),
+          z.string().regex(/^\+?[\d\s\-().]{7,20}$/),
+        ]).describe("Email or phone number of the requester"),
         priority: z.enum(["Low", "Medium", "High", "Urgent"]).optional().describe("Priority level (default: Medium)"),
         source: z.enum(["Mail", "Call"]).optional().describe("Source channel (default: Call)"),
         status: z.enum(["Open", "Pending", "Resolved", "Closed"]).optional().describe("Initial status (default: Open)"),
         brand_id: z.number().int().optional().describe("Brand ID (uses account default if omitted)"),
-        assignee: z.email().optional().describe("Agent email address to assign the conversation to"),
+        assignee: z.string().email().optional().describe("Agent email address to assign the conversation to"),
         team_id: z.number().int().optional().describe("Team ID to assign the conversation to"),
         custom_fields: z.array(z.object({
           internal_name: z.string().describe("Custom field internal name"),
-          value: z.unknown().describe("Custom field value"),
+          value: z.union([z.string(), z.number(), z.boolean(), z.null()]).describe("Custom field value"),
         })).optional().describe("Custom field values"),
       },
     },
@@ -271,10 +351,10 @@ function createServer(authToken: string) {
       inputSchema: {
         first_name: z.string().describe("Contact's first name"),
         last_name: z.string().optional().describe("Contact's last name"),
-        email: z.email().optional().describe("Contact's email address (required if phone not provided)"),
+        email: z.string().email().optional().describe("Contact's email address (required if phone not provided)"),
         phone: z.string().optional().describe("Contact's phone number (required if email not provided)"),
         company_id: z.number().int().optional().describe("ID of the company to associate the contact with"),
-        custom_fields: z.record(z.string(), z.unknown()).optional().describe("Custom field key-value pairs"),
+        custom_fields: z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()])).optional().describe("Custom field key-value pairs"),
       },
     },
     async ({ first_name, last_name, email, phone, company_id, custom_fields }) => {
@@ -302,11 +382,11 @@ function createServer(authToken: string) {
         id: z.number().int().describe("The contact ID to update"),
         first_name: z.string().optional().describe("Contact's first name"),
         last_name: z.string().optional().describe("Contact's last name"),
-        email: z.email().optional().describe("Contact's email address"),
+        email: z.string().email().optional().describe("Contact's email address"),
         phone: z.string().optional().describe("Contact's phone number"),
         company_id: z.number().int().optional().describe("ID of the company to associate the contact with"),
         blocked: z.boolean().optional().describe("Whether the contact is blocked"),
-        custom_fields: z.record(z.string(), z.unknown()).optional().describe("Custom field key-value pairs"),
+        custom_fields: z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()])).optional().describe("Custom field key-value pairs"),
       },
     },
     async ({ id, first_name, last_name, email, phone, company_id, blocked, custom_fields }) => {
@@ -348,8 +428,8 @@ function createServer(authToken: string) {
       description: "Retrieve all contact fields from SparrowDesk",
       inputSchema: {
         search: z.string().optional().describe("Search contact fields by name"),
-        page: z.number().int().optional().describe("Page number for pagination"),
-        limit: z.number().int().optional().describe("Results per page"),
+        page: z.number().int().min(1).optional().describe("Page number for pagination"),
+        limit: z.number().int().min(1).max(100).optional().describe("Results per page (1-100)"),
       },
     },
     async ({ search, page, limit }) => {
@@ -400,9 +480,26 @@ function createServer(authToken: string) {
   return server;
 }
 
+// ---------------------------------------------------------------------------
+// Express app
+// ---------------------------------------------------------------------------
 const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
+
+// Rate limiters
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 50,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+const mcpLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 100,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 app.get("/health", (_req, res) => {
   res.json({ status: "ok" });
@@ -421,22 +518,28 @@ app.get("/.well-known/oauth-authorization-server", (_req, res) => {
   });
 });
 
-// Dynamic client registration (RFC 7591) — we proxy to SparrowDesk with a fixed app,
-// so we just issue a client_id and store the redirect_uris for later validation.
-const registeredClients = new Map<string, { redirectUris: string[] }>();
-
-app.post(["/oauth/register", "/mcp/oauth/register"], (req, res) => {
+// Dynamic client registration (RFC 7591)
+app.post(["/oauth/register", "/mcp/oauth/register"], authLimiter, (req, res) => {
   const { redirect_uris, client_name } = req.body as { redirect_uris?: string[]; client_name?: string };
 
+  console.log(`[register] client_name=${client_name ?? "(none)"} redirect_uris=${JSON.stringify(redirect_uris)}`);
+
   if (!redirect_uris?.length) {
+    console.warn("[register] rejected: missing redirect_uris");
     res.status(400).json({ error: "invalid_client_metadata", error_description: "redirect_uris required" });
+    return;
+  }
+
+  if (registeredClients.size >= MAX_REGISTERED_CLIENTS) {
+    console.warn(`[register] rejected: client cap reached (${registeredClients.size})`);
+    res.status(429).json({ error: "too_many_requests", error_description: "Client registration limit reached" });
     return;
   }
 
   const clientId = crypto.randomBytes(16).toString("hex");
   registeredClients.set(clientId, { redirectUris: redirect_uris });
   expireAfter(registeredClients as Map<string, unknown>, clientId, 24 * 60 * 60 * 1000);
-  console.log(`OAuth client registered: ${client_name ?? "unknown"} (${clientId})`);
+  console.log(`[register] ok client_id=${clientId} client_name=${client_name ?? "unknown"} redirect_uris=${JSON.stringify(redirect_uris)}`);
 
   res.status(201).json({
     client_id: clientId,
@@ -456,18 +559,47 @@ app.get("/.well-known/oauth-protected-resource", (_req, res) => {
   });
 });
 
-app.get(["/oauth/authorize", "/mcp/oauth/authorize"], (req, res) => {
+app.get(["/oauth/authorize", "/mcp/oauth/authorize"], authLimiter, (req, res) => {
   const { client_id, redirect_uri, state, code_challenge, code_challenge_method, scope } = req.query as Record<string, string>;
 
+  console.log(`[authorize] client_id=${client_id} redirect_uri=${redirect_uri} scope=${scope} pkce=${code_challenge_method ?? "none"} state=${state?.slice(0, 8)}`);
+
+  if (!client_id) {
+    console.warn("[authorize] rejected: missing client_id");
+    res.status(400).json({ error: "invalid_request", error_description: "client_id required" });
+    return;
+  }
+
+  const client = registeredClients.get(client_id);
+  if (!client) {
+    console.warn(`[authorize] rejected: unknown client_id=${client_id} (registered=${registeredClients.size})`);
+    res.status(400).json({ error: "invalid_client", error_description: "Unknown client_id" });
+    return;
+  }
+
   if (!redirect_uri || !state) {
+    console.warn(`[authorize] rejected: missing redirect_uri=${redirect_uri} or state=${state}`);
     res.status(400).json({ error: "invalid_request", error_description: "Missing redirect_uri or state" });
     return;
   }
 
-  const client = client_id ? registeredClients.get(client_id) : undefined;
-  if (client && !client.redirectUris.includes(redirect_uri)) {
+  if (!client.redirectUris.includes(redirect_uri)) {
+    console.warn(`[authorize] rejected: redirect_uri mismatch. got=${redirect_uri} allowed=${JSON.stringify(client.redirectUris)}`);
     res.status(400).json({ error: "invalid_request", error_description: "redirect_uri not registered for this client" });
     return;
+  }
+
+  if (pendingAuth.size >= MAX_PENDING_AUTH) {
+    console.warn(`[authorize] rejected: pendingAuth cap reached (${pendingAuth.size})`);
+    res.status(429).json({ error: "too_many_requests" });
+    return;
+  }
+
+  // Allowlist scope values — strip any unknown scopes, fall back to DEFAULT_SCOPE
+  const requestedScopes = scope?.split(" ").filter((s) => ALLOWED_SCOPES.has(s)) ?? [];
+  const finalScope = requestedScopes.length ? requestedScopes.join(" ") : DEFAULT_SCOPE;
+  if (scope && requestedScopes.length !== scope.split(" ").length) {
+    console.warn(`[authorize] scope filtered. requested=${scope} final=${finalScope}`);
   }
 
   const internalState = crypto.randomBytes(16).toString("hex");
@@ -476,7 +608,7 @@ app.get(["/oauth/authorize", "/mcp/oauth/authorize"], (req, res) => {
     clientState: state,
     codeChallenge: code_challenge,
     codeChallengeMethod: code_challenge_method,
-    scope,
+    scope: finalScope,
   });
   expireAfter(pendingAuth, internalState);
 
@@ -485,26 +617,35 @@ app.get(["/oauth/authorize", "/mcp/oauth/authorize"], (req, res) => {
     redirect_uri: `${MCP_PUBLIC_URL}/oauth/callback`,
     response_type: "code",
     state: internalState,
-    scope: scope || DEFAULT_SCOPE,
+    scope: finalScope,
   });
 
-  res.redirect(`${SD_AUTHORIZE_URL}?${params.toString()}`);
+  const upstreamUrl = `${SD_AUTHORIZE_URL}?${params.toString()}`;
+  console.log(`[authorize] ok redirecting to upstream state=${internalState.slice(0, 8)} url=${upstreamUrl}`);
+  res.redirect(upstreamUrl);
 });
 
 app.get(["/oauth/callback", "/mcp/oauth/callback"], async (req, res) => {
   const { code, state, error } = req.query as Record<string, string>;
 
+  console.log(`[callback] state=${state?.slice(0, 8)} code=${code ? "present" : "missing"} error=${error ?? "none"}`);
+
   if (error) {
-    res.status(400).send(`OAuth error: ${error}`);
+    const safeError = KNOWN_OAUTH_ERRORS.has(error) ? error : "server_error";
+    console.warn(`[callback] upstream returned error=${error} (sanitized to ${safeError})`);
+    res.status(400).json({ error: safeError });
     return;
   }
 
   const pending = pendingAuth.get(state);
   if (!pending) {
+    console.warn(`[callback] state=${state?.slice(0, 8)} not found in pendingAuth (size=${pendingAuth.size}) — likely expired or replayed`);
     res.status(400).json({ error: "invalid_request", error_description: "Invalid or expired state" });
     return;
   }
   pendingAuth.delete(state);
+
+  console.log(`[callback] state ok, exchanging code with upstream url=${SD_TOKEN_URL} redirect_uri=${MCP_PUBLIC_URL}/oauth/callback`);
 
   const tokenRes = await fetch(SD_TOKEN_URL, {
     method: "POST",
@@ -520,11 +661,20 @@ app.get(["/oauth/callback", "/mcp/oauth/callback"], async (req, res) => {
 
   if (!tokenRes.ok) {
     const text = await tokenRes.text();
-    res.status(502).send(`Token exchange failed: ${text}`);
+    console.error(`[callback] upstream token exchange failed status=${tokenRes.status} body=${text}`);
+    res.status(502).json({ error: "server_error", error_description: "Token exchange failed" });
     return;
   }
 
   const tokenData = await tokenRes.json() as { access_token: string; refresh_token: string; expires_in?: number };
+  console.log(`[callback] upstream token exchange ok expires_in=${tokenData.expires_in ?? 3600}s has_refresh=${!!tokenData.refresh_token}`);
+
+  if (pendingCodes.size >= MAX_PENDING_CODES) {
+    console.warn(`[callback] pendingCodes cap reached (${pendingCodes.size})`);
+    res.status(429).json({ error: "too_many_requests" });
+    return;
+  }
+
   const ourCode = crypto.randomBytes(16).toString("hex");
   pendingCodes.set(ourCode, {
     token: tokenData.access_token,
@@ -539,32 +689,45 @@ app.get(["/oauth/callback", "/mcp/oauth/callback"], async (req, res) => {
   const redirectUrl = new URL(pending.clientRedirectUri);
   redirectUrl.searchParams.set("code", ourCode);
   redirectUrl.searchParams.set("state", pending.clientState);
+  console.log(`[callback] ok redirecting to client redirect_uri=${pending.clientRedirectUri}`);
   res.redirect(redirectUrl.toString());
 });
 
-app.post(["/oauth/token", "/mcp/oauth/token"], (req, res) => {
+app.post(["/oauth/token", "/mcp/oauth/token"], authLimiter, (req, res) => {
   const { code, code_verifier, redirect_uri } = req.body as Record<string, string>;
+
+  console.log(`[token] code=${code?.slice(0, 8)} redirect_uri=${redirect_uri} pkce_verifier=${code_verifier ? "present" : "absent"}`);
 
   const pending = pendingCodes.get(code);
   if (!pending) {
+    console.warn(`[token] code=${code?.slice(0, 8)} not found in pendingCodes (size=${pendingCodes.size}) — likely expired or already used`);
     res.status(400).json({ error: "invalid_grant", error_description: "Invalid or expired code" });
     return;
   }
 
   if (pending.codeChallenge && pending.codeChallengeMethod === "S256") {
     if (!code_verifier) {
+      console.warn(`[token] code=${code?.slice(0, 8)} PKCE required but code_verifier missing`);
       res.status(400).json({ error: "invalid_grant", error_description: "code_verifier required" });
       return;
     }
     const challenge = crypto.createHash("sha256").update(code_verifier).digest().toString("base64url");
     if (challenge !== pending.codeChallenge) {
+      console.warn(`[token] code=${code?.slice(0, 8)} PKCE mismatch computed=${challenge} expected=${pending.codeChallenge}`);
       res.status(400).json({ error: "invalid_grant", error_description: "PKCE verification failed" });
       return;
     }
   }
 
   if (redirect_uri && redirect_uri !== pending.clientRedirectUri) {
+    console.warn(`[token] code=${code?.slice(0, 8)} redirect_uri mismatch got=${redirect_uri} expected=${pending.clientRedirectUri}`);
     res.status(400).json({ error: "invalid_grant", error_description: "redirect_uri mismatch" });
+    return;
+  }
+
+  if (sessions.size >= MAX_SESSIONS) {
+    console.warn(`[token] sessions cap reached (${sessions.size})`);
+    res.status(429).json({ error: "too_many_requests" });
     return;
   }
 
@@ -575,15 +738,34 @@ app.post(["/oauth/token", "/mcp/oauth/token"], (req, res) => {
     refreshToken: pending.refreshToken,
     expiresAt: Date.now() + (pending.expiresIn ?? 3600) * 1000,
   });
+  console.log(`[token] ok session created token=${mcpToken.slice(0, 8)} expires_in=${pending.expiresIn ?? 3600}s`);
   res.json({ access_token: mcpToken, token_type: "Bearer" });
 });
 
-app.all("/mcp", async (req, res) => {
+app.all("/mcp", mcpLimiter, async (req, res) => {
+  const origin = req.headers.origin;
+  const protocolVersion = req.headers["mcp-protocol-version"] as string | undefined;
   const authHeader = req.headers.authorization;
-  const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
 
-  const session = token ? await refreshSession(token) : null;
-  if (!session) {
+  console.log(`[mcp] ${req.method} origin=${origin ?? "(none)"} protocol-version=${protocolVersion ?? "(none)"} auth=${authHeader ? "present" : "missing"}`);
+
+  // Origin header validation — prevents DNS rebinding attacks (MCP spec MUST requirement)
+  if (origin && !ALLOWED_ORIGINS.has(origin)) {
+    console.warn(`[mcp] rejected: invalid origin=${origin} allowed=${JSON.stringify([...ALLOWED_ORIGINS])}`);
+    res.status(403).json({ error: "Forbidden: invalid Origin" });
+    return;
+  }
+
+  // MCP-Protocol-Version validation (MCP spec MUST requirement)
+  if (protocolVersion && !SUPPORTED_PROTOCOL_VERSIONS.has(protocolVersion)) {
+    console.warn(`[mcp] rejected: unsupported protocol version=${protocolVersion}`);
+    res.status(400).json({ error: "Unsupported MCP-Protocol-Version" });
+    return;
+  }
+
+  const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
+  if (!token) {
+    console.warn("[mcp] rejected: no Bearer token in Authorization header");
     res
       .status(401)
       .set("WWW-Authenticate", `Bearer resource_metadata="${MCP_PUBLIC_URL}/.well-known/oauth-protected-resource"`)
@@ -591,7 +773,20 @@ app.all("/mcp", async (req, res) => {
     return;
   }
 
-  const server = createServer(session.sdToken);
+  const session = await refreshSession(token);
+  if (!session) {
+    console.warn(`[mcp] rejected: token=${token.slice(0, 8)} not valid or refresh failed`);
+    res
+      .status(401)
+      .set("WWW-Authenticate", `Bearer resource_metadata="${MCP_PUBLIC_URL}/.well-known/oauth-protected-resource"`)
+      .json({ error: "Valid OAuth token required" });
+    return;
+  }
+
+  const sessionHint = token.slice(0, 8);
+  console.log(`[mcp] session=${sessionHint} ok, handling ${req.method} request`);
+
+  const server = createServer(session.sdToken, sessionHint);
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
   await server.connect(transport);
   await transport.handleRequest(req, res, req.body);
