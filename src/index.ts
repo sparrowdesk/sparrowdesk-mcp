@@ -50,8 +50,6 @@ const ALLOWED_ORIGINS = new Set([
   "http://localhost:3000",
 ]);
 
-// Supported MCP protocol versions
-const SUPPORTED_PROTOCOL_VERSIONS = new Set(["2025-06-18", "2025-03-26"]);
 
 // Known OAuth error codes — only forward these to avoid reflecting attacker input
 const KNOWN_OAUTH_ERRORS = new Set([
@@ -756,12 +754,7 @@ app.all("/mcp", mcpLimiter, async (req, res) => {
     return;
   }
 
-  // MCP-Protocol-Version validation (MCP spec MUST requirement)
-  if (protocolVersion && !SUPPORTED_PROTOCOL_VERSIONS.has(protocolVersion)) {
-    console.warn(`[mcp] rejected: unsupported protocol version=${protocolVersion}`);
-    res.status(400).json({ error: "Unsupported MCP-Protocol-Version" });
-    return;
-  }
+
 
   const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
   if (!token) {
