@@ -536,6 +536,17 @@ app.post(["/oauth/register", "/mcp/oauth/register"], authLimiter, (req, res) => 
     return;
   }
 
+  const ALLOWED_REDIRECT_SCHEMES = ["https:", "http:", "cursor:", "claude:"];
+  const invalidUri = redirect_uris.find(uri => {
+    try { return !ALLOWED_REDIRECT_SCHEMES.includes(new URL(uri).protocol); }
+    catch { return true; }
+  });
+  if (invalidUri) {
+    console.warn(`[register] rejected: invalid redirect_uri scheme uri=${invalidUri}`);
+    res.status(400).json({ error: "invalid_redirect_uri", error_description: "redirect_uri scheme not allowed" });
+    return;
+  }
+
   if (registeredClients.size >= MAX_REGISTERED_CLIENTS) {
     console.warn(`[register] rejected: client cap reached (${registeredClients.size})`);
     res.status(429).json({ error: "too_many_requests", error_description: "Client registration limit reached" });
@@ -695,8 +706,32 @@ app.get(["/oauth/callback", "/mcp/oauth/callback"], async (req, res) => {
   const redirectUrl = new URL(pending.clientRedirectUri);
   redirectUrl.searchParams.set("code", ourCode);
   redirectUrl.searchParams.set("state", pending.clientState);
+  const appUrl = redirectUrl.toString();
   console.log(`[callback] ok redirecting to client redirect_uri=${pending.clientRedirectUri}`);
-  res.redirect(redirectUrl.toString());
+  res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Connected to SparrowDesk</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; background: #f5f5f5; }
+    .card { background: white; border-radius: 12px; padding: 48px 40px; text-align: center; max-width: 400px; box-shadow: 0 2px 16px rgba(0,0,0,0.08); }
+    .icon { font-size: 48px; margin-bottom: 16px; }
+    h1 { font-size: 22px; margin: 0 0 8px; color: #111; }
+    p { color: #555; margin: 0 0 24px; line-height: 1.5; }
+    a { display: inline-block; padding: 10px 20px; background: #0e7a6e; color: white; border-radius: 8px; text-decoration: none; font-size: 14px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="icon">&#10003;</div>
+    <h1>Authorization successful</h1>
+    <p>SparrowDesk is now connected. You can close this tab and return to your app.</p>
+    <a href="${appUrl}">Return to app</a>
+  </div>
+  <script>window.location.href = ${JSON.stringify(appUrl)};</script>
+</body>
+</html>`);
 });
 
 app.post(["/oauth/token", "/mcp/oauth/token"], authLimiter, (req, res) => {
