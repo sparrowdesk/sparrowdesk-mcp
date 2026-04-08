@@ -29,6 +29,7 @@ console.log("[startup] Config:", JSON.stringify({
   SD_TOKEN_URL: process.env.SPARROWDESK_OAUTH_TOKEN_URL ?? "(derived)",
   SD_CLIENT_ID: process.env.SPARROWDESK_CLIENT_ID,
   PORT: process.env.PORT ?? "(default 3000)",
+  TRUST_PROXY: process.env.TRUST_PROXY ?? "(see Express trust proxy log)",
 }));
 
 const API_BASE = (process.env.SPARROWDESK_API_BASE ?? "https://api.sparrowdesk.com/v1").replace(/\/$/, "");
@@ -63,7 +64,10 @@ const KNOWN_OAUTH_ERRORS = new Set([
 ]);
 
 // ---------------------------------------------------------------------------
-// In-memory OAuth state — acceptable for single-instance deployment
+// In-memory OAuth state — single-process only. With multiple replicas, dynamic
+// client registration (/oauth/register) and the rest of the OAuth flow can land
+// on different instances → "unknown client_id" and empty pendingAuth. Fix:
+// run one replica, enable sticky sessions for this service, or add shared storage.
 // ---------------------------------------------------------------------------
 interface PendingAuth {
   clientRedirectUri: string;
@@ -482,6 +486,25 @@ function createServer(authToken: string, sessionHint: string) {
 // Express app
 // ---------------------------------------------------------------------------
 const app = express();
+
+// Behind ALB, nginx, Kubernetes Ingress, etc., proxies set X-Forwarded-*.
+// express-rate-limit v8 rejects those headers unless trust proxy is enabled.
+// Many containers omit NODE_ENV; public https URL implies a reverse proxy in front.
+// Set TRUST_PROXY=0 to disable (e.g. direct-to-container with no proxy).
+const trustProxyRaw = process.env.TRUST_PROXY;
+const trustProxyDisabled = trustProxyRaw === "0" || trustProxyRaw === "false";
+const likelyBehindReverseProxy =
+  MCP_PUBLIC_URL.startsWith("https://") || process.env.NODE_ENV === "production";
+if (!trustProxyDisabled) {
+  if (trustProxyRaw !== undefined && trustProxyRaw !== "") {
+    const n = Number.parseInt(trustProxyRaw, 10);
+    app.set("trust proxy", Number.isNaN(n) ? 1 : n);
+  } else if (likelyBehindReverseProxy) {
+    app.set("trust proxy", 1);
+  }
+}
+console.log("[startup] Express trust proxy:", app.get("trust proxy"));
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 
