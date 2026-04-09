@@ -215,6 +215,7 @@ function createServer(authToken: string, sessionHint: string) {
     "get_conversation",
     {
       description: "Retrieve a conversation (also called a ticket) by ID from SparrowDesk",
+      annotations: { readOnlyHint: true },
       inputSchema: { id: z.number().int().describe("The conversation ID") },
     },
     async ({ id }) => {
@@ -228,6 +229,7 @@ function createServer(authToken: string, sessionHint: string) {
     "list_conversations",
     {
       description: "List conversations (also called tickets) from SparrowDesk with optional filters",
+      annotations: { readOnlyHint: true },
       inputSchema: {
         starting_after: z.string().optional().describe("Pagination cursor"),
         per_page: z.number().int().min(1).max(100).optional().describe("Items per page (1-100, default 25)"),
@@ -265,6 +267,7 @@ function createServer(authToken: string, sessionHint: string) {
     "list_conversation_replies",
     {
       description: "List all replies for a conversation (also called a ticket) in SparrowDesk",
+      annotations: { readOnlyHint: true },
       inputSchema: {
         id: z.number().int().describe("The conversation ID"),
         starting_after: z.string().optional().describe("Pagination cursor"),
@@ -291,6 +294,7 @@ function createServer(authToken: string, sessionHint: string) {
     "add_conversation_reply",
     {
       description: "Add a reply or internal note to a conversation (also called a ticket) in SparrowDesk",
+      annotations: { destructiveHint: false },
       inputSchema: {
         id: z.number().int().describe("The conversation ID"),
         reply_text: z.string().describe("The content of the reply message"),
@@ -311,6 +315,7 @@ function createServer(authToken: string, sessionHint: string) {
     "create_conversation",
     {
       description: "Create a new conversation (also called a ticket) in SparrowDesk",
+      annotations: { destructiveHint: false },
       inputSchema: {
         subject: z.string().describe("Conversation subject"),
         description: z.string().describe("Conversation description"),
@@ -350,6 +355,7 @@ function createServer(authToken: string, sessionHint: string) {
     "create_contact",
     {
       description: "Create a new contact in SparrowDesk. Either email or phone must be provided.",
+      annotations: { destructiveHint: false },
       inputSchema: {
         first_name: z.string().describe("Contact's first name"),
         last_name: z.string().optional().describe("Contact's last name"),
@@ -380,6 +386,7 @@ function createServer(authToken: string, sessionHint: string) {
     "update_contact",
     {
       description: "Update an existing contact in SparrowDesk",
+      annotations: { destructiveHint: false },
       inputSchema: {
         id: z.number().int().describe("The contact ID to update"),
         first_name: z.string().optional().describe("Contact's first name"),
@@ -415,6 +422,7 @@ function createServer(authToken: string, sessionHint: string) {
     "get_contact",
     {
       description: "Retrieve a contact by ID from SparrowDesk",
+      annotations: { readOnlyHint: true },
       inputSchema: { id: z.number().int().describe("The contact ID") },
     },
     async ({ id }) => {
@@ -428,6 +436,7 @@ function createServer(authToken: string, sessionHint: string) {
     "list_contact_fields",
     {
       description: "Retrieve all contact fields from SparrowDesk",
+      annotations: { readOnlyHint: true },
       inputSchema: {
         search: z.string().optional().describe("Search contact fields by name"),
         page: z.number().int().min(1).optional().describe("Page number for pagination"),
@@ -450,6 +459,7 @@ function createServer(authToken: string, sessionHint: string) {
     "list_members",
     {
       description: "Retrieve a paginated list of all team members in the SparrowDesk account",
+      annotations: { readOnlyHint: true },
       inputSchema: {
         starting_after: z.string().optional().describe("Pagination cursor"),
         per_page: z.number().int().min(1).max(100).optional().describe("Items per page (1-100, default 25)"),
@@ -470,6 +480,7 @@ function createServer(authToken: string, sessionHint: string) {
     "get_me",
     {
       description: "Retrieve the currently authenticated member's profile from SparrowDesk",
+      annotations: { readOnlyHint: true },
       inputSchema: {},
     },
     async () => {
@@ -938,6 +949,17 @@ app.all("/mcp", mcpLimiter, async (req, res) => {
   if (origin && !ALLOWED_ORIGINS.has(origin)) {
     console.warn(`[mcp] rejected: invalid origin=${origin} allowed=${JSON.stringify([...ALLOWED_ORIGINS])}`);
     res.status(403).json({ error: "Forbidden: invalid Origin" });
+    return;
+  }
+
+  if (origin && ALLOWED_ORIGINS.has(origin)) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type, mcp-protocol-version");
+  }
+
+  if (req.method === "OPTIONS") {
+    res.status(204).end();
     return;
   }
 
