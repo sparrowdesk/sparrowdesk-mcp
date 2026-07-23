@@ -18,6 +18,7 @@ Tools mirror the [SparrowDesk Developer API](https://api.sparrowdesk.com/public-
 | `create_conversation` | Create a new conversation/ticket |
 | `update_conversation` | Update subject, status, priority, assignee, team, custom fields |
 | `delete_conversation` | Delete a conversation |
+| `list_conversations_with_replies` | List conversations with their replies inlined in one call |
 | `list_conversation_replies` | List replies for a conversation |
 | `add_conversation_reply` | Add a reply or internal note |
 | **Conversation fields** | |
@@ -34,6 +35,9 @@ Tools mirror the [SparrowDesk Developer API](https://api.sparrowdesk.com/public-
 | `bulk_create_contacts` | Bulk create contacts (returns job id) |
 | `get_bulk_job_status` | Poll bulk contact job status |
 | `list_companies` | List companies |
+| `get_company` | Retrieve a company by ID |
+| `create_company` | Create a company |
+| `update_company` | Update a company |
 | **Contact fields** | |
 | `list_contact_fields` | List contact field definitions |
 | **Members & tags** | |
@@ -113,6 +117,23 @@ List conversations with optional filters, sorting, and pagination.
 - `brand_id` (array of integers, optional) — Filter by brand IDs
 - `requested_by_id` (integer, optional) — Filter by requestor contact ID
 - `requested_by_company` (integer, optional) — Filter by requester contact company ID (intersects with `requested_by_id` when both are set)
+- `sort_by` (string, optional) — `created_at` or `updated_at` (default: `created_at`)
+- `sort_order` (string, optional) — `asc` or `desc` (default: `desc`)
+
+---
+
+### `list_conversations_with_replies`
+
+List conversations with their replies inlined in a single call — the same filters as `list_conversations`, plus reply controls. Root `pages` / `total_count` apply to conversations only; each row carries a `replies` object shaped like `list_conversation_replies`.
+
+**Parameters:**
+- `starting_after` (string, optional) — Cursor for conversation list pagination
+- `per_page` (integer, optional) — Conversations per page, 1–20 (default: 20)
+- `replies_per_page` (integer, optional) — Replies per conversation, 1–50 (default: 50)
+- `replies_sort_order` (string, optional) — Reply sort by `sent_at`: `asc` or `desc` (default: `desc`)
+- `type` (string, optional) — Filter replies by `INTERNAL_NOTE` or `REPLY`
+- `status`, `priority`, `assigned_to_member_id`, `assigned_to_team_id`, `brand_id`, `requested_by_id` — Same conversation filters as `list_conversations`
+- `handled_by_ai_agent` (boolean, optional) — Filter by whether the conversation was handled by the AI agent
 - `sort_by` (string, optional) — `created_at` or `updated_at` (default: `created_at`)
 - `sort_order` (string, optional) — `asc` or `desc` (default: `desc`)
 
@@ -212,6 +233,34 @@ Bulk create accepts `contacts`: array of objects with optional `first_name`, `la
 ### `list_companies`
 
 **Parameters:** `starting_after`, `per_page`, `domain` (exact), `name` (exact)
+
+---
+
+### `get_company`
+
+**Parameters:** `id` (integer, required)
+
+---
+
+### `create_company`
+
+Create a new company.
+
+**Parameters:**
+- `name` (string, required) — Company name
+- `domain` (string, optional) — Lowercase domain like `example.com`
+- `address` (string, optional) — Company address
+- `notes` (string, optional) — Free-form notes
+
+---
+
+### `update_company`
+
+Update an existing company. At least one field must be provided.
+
+**Parameters:**
+- `id` (integer, required) — The company ID to update
+- `name`, `domain`, `phone`, `address`, `notes` — Optional updates
 
 ---
 
