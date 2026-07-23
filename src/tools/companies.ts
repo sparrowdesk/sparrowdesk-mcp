@@ -24,4 +24,63 @@ export function registerCompanyTools({ server, apiRequest, apiBase }: ToolContex
       return formatResult(await apiRequest(`${apiBase}/companies${query}`));
     }
   );
+
+  server.registerTool(
+    "get_company",
+    {
+      description: "Retrieve a company by ID from SparrowDesk",
+      annotations: { readOnlyHint: true },
+      inputSchema: { id: z.number().int().describe("The company ID") },
+    },
+    async ({ id }) => formatResult(await apiRequest(`${apiBase}/companies/${id}`))
+  );
+
+  server.registerTool(
+    "create_company",
+    {
+      description: "Create a new company in SparrowDesk",
+      annotations: { destructiveHint: false },
+      inputSchema: {
+        name: z.string().describe("Company name"),
+        domain: z.string().optional().describe("Lowercase domain like example.com or company.co.uk"),
+        address: z.string().optional().describe("Company address"),
+        notes: z.string().optional().describe("Free-form notes about the company"),
+      },
+    },
+    async ({ name, domain, address, notes }) => {
+      const body: Record<string, unknown> = { name };
+      if (domain !== undefined) body.domain = domain;
+      if (address !== undefined) body.address = address;
+      if (notes !== undefined) body.notes = notes;
+      return formatResult(await apiRequest(`${apiBase}/companies`, { method: "POST", body }));
+    }
+  );
+
+  server.registerTool(
+    "update_company",
+    {
+      description: "Update an existing company in SparrowDesk",
+      annotations: { destructiveHint: false },
+      inputSchema: {
+        id: z.number().int().describe("The company ID to update"),
+        name: z.string().optional().describe("Company name"),
+        domain: z.string().optional().describe("Lowercase domain like example.com or company.co.uk"),
+        phone: z.string().optional().describe("Company phone number"),
+        address: z.string().optional().describe("Company address"),
+        notes: z.string().optional().describe("Free-form notes about the company"),
+      },
+    },
+    async ({ id, name, domain, phone, address, notes }) => {
+      const body: Record<string, unknown> = {};
+      if (name !== undefined) body.name = name;
+      if (domain !== undefined) body.domain = domain;
+      if (phone !== undefined) body.phone = phone;
+      if (address !== undefined) body.address = address;
+      if (notes !== undefined) body.notes = notes;
+      if (Object.keys(body).length === 0) {
+        return { content: [{ type: "text" as const, text: "Error: At least one field to update must be provided" }], isError: true };
+      }
+      return formatResult(await apiRequest(`${apiBase}/companies/${id}`, { method: "PATCH", body }));
+    }
+  );
 }

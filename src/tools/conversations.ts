@@ -51,6 +51,50 @@ export function registerConversationTools({ server, apiRequest, apiBase }: ToolC
   );
 
   server.registerTool(
+    "list_conversations_with_replies",
+    {
+      description: "List conversations (tickets) with their replies inlined in one call. Uses the same filters as list_conversations. Root pages/total_count apply to conversations only; each row includes a replies object with the same shape as list_conversation_replies.",
+      annotations: { readOnlyHint: true },
+      inputSchema: {
+        starting_after: z.string().optional().describe("Cursor for conversation list pagination"),
+        per_page: z.number().int().min(1).max(20).optional().describe("Conversations per page (1-20, default 20)"),
+        replies_per_page: z.number().int().min(1).max(50).optional().describe("Replies per conversation (1-50, default 50)"),
+        replies_sort_order: z.enum(["asc", "desc"]).optional().describe("Reply list sort by sent_at (default desc)"),
+        type: z.enum(["INTERNAL_NOTE", "REPLY"]).optional().describe("Filter replies by type"),
+        status: z.array(z.enum(["Open", "Pending", "Resolved", "Closed"])).optional().describe("Filter by status (can be multiple)"),
+        priority: z.array(z.enum(["Low", "Medium", "High", "Urgent"])).optional().describe("Filter by priority (can be multiple)"),
+        assigned_to_member_id: z.array(z.number().int()).optional().describe("Filter by assigned agent IDs"),
+        assigned_to_team_id: z.array(z.number().int()).optional().describe("Filter by assigned team IDs"),
+        brand_id: z.array(z.number().int()).optional().describe("Filter by brand IDs"),
+        requested_by_id: z.number().int().optional().describe("Filter by requestor contact ID"),
+        handled_by_ai_agent: z.boolean().optional().describe("Filter by whether the conversation was handled by the AI agent (omit for no filter)"),
+        sort_by: z.enum(["created_at", "updated_at"]).optional().describe("Field to sort the conversation list by (default: created_at)"),
+        sort_order: z.enum(["asc", "desc"]).optional().describe("Sort order for the conversation list (default: desc)"),
+      },
+    },
+    async ({ starting_after, per_page, replies_per_page, replies_sort_order, type, status, priority, assigned_to_member_id, assigned_to_team_id, brand_id, requested_by_id, handled_by_ai_agent, sort_by, sort_order }) => {
+      const params = new URLSearchParams();
+      if (starting_after) params.set("starting_after", starting_after);
+      if (per_page) params.set("per_page", String(per_page));
+      if (replies_per_page) params.set("replies_per_page", String(replies_per_page));
+      if (replies_sort_order) params.set("replies_sort_order", replies_sort_order);
+      if (type) params.set("type", type);
+      if (status) status.forEach((s) => params.append("status[]", s));
+      if (priority) priority.forEach((p) => params.append("priority[]", p));
+      if (assigned_to_member_id) assigned_to_member_id.forEach((id) => params.append("assigned_to_member_id[]", String(id)));
+      if (assigned_to_team_id) assigned_to_team_id.forEach((id) => params.append("assigned_to_team_id[]", String(id)));
+      if (brand_id) brand_id.forEach((id) => params.append("brand_id[]", String(id)));
+      if (requested_by_id) params.set("requested_by_id", String(requested_by_id));
+      if (handled_by_ai_agent !== undefined) params.set("handled_by_ai_agent", String(handled_by_ai_agent));
+      if (sort_by) params.set("sort_by", sort_by);
+      if (sort_order) params.set("sort_order", sort_order);
+
+      const query = params.toString() ? `?${params.toString()}` : "";
+      return formatResult(await apiRequest(`${apiBase}/conversations/with-replies${query}`));
+    }
+  );
+
+  server.registerTool(
     "list_conversation_replies",
     {
       description: "List all replies for a conversation (also called a ticket) in SparrowDesk",
