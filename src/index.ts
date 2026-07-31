@@ -1,4 +1,5 @@
 import crypto from "crypto";
+import path from "path";
 import express from "express";
 import { rateLimit } from "express-rate-limit";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -230,6 +231,10 @@ console.log("[startup] Express trust proxy:", app.get("trust proxy"));
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 
+// Favicons and other static brand assets. Resolved relative to this file rather
+// than cwd so it works from both src/ (tsx) and dist/ (built).
+app.use(express.static(path.join(import.meta.dirname, "..", "public"), { maxAge: "7d" }));
+
 // Rate limiters
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
@@ -251,6 +256,10 @@ app.get("/", (_req, res) => {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>SparrowDesk MCP</title>
+  <link rel="icon" href="/favicon.ico" sizes="48x48" type="image/x-icon">
+  <link rel="icon" href="/icon.svg" sizes="any" type="image/svg+xml">
+  <link rel="icon" href="/icon-96.png" sizes="96x96" type="image/png">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" sizes="180x180">
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -593,6 +602,8 @@ app.get(["/oauth/callback", "/mcp/oauth/callback"], async (req, res) => {
 <head>
   <meta charset="utf-8">
   <title>Connected to SparrowDesk</title>
+  <link rel="icon" href="/favicon.ico" sizes="48x48" type="image/x-icon">
+  <link rel="icon" href="/icon.svg" sizes="any" type="image/svg+xml">
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; background: #f5f5f5; }
     .card { background: white; border-radius: 12px; padding: 48px 40px; text-align: center; max-width: 400px; box-shadow: 0 2px 16px rgba(0,0,0,0.08); }
