@@ -353,6 +353,16 @@ Use **`list_helpcenters`** first to obtain `helpCenterId`. Collections and artic
 
 ---
 
+## Privacy Policy
+
+This server proxies requests to the SparrowDesk API on behalf of the signed-in user. It stores no ticket, contact, or Knowledge Base content — only in-memory OAuth session state (access and refresh tokens), which is discarded when the process restarts. What the server can read or write is bounded by the permissions of the SparrowDesk account you sign in with, and every action is recorded against your user in SparrowDesk.
+
+Data collection, storage, retention, third-party sharing, and contact details are covered in the [SparrowDesk Privacy Policy](https://www.sparrowdesk.com/legal/privacy-policy). Use of SparrowDesk is governed by the [Terms of Service](https://www.sparrowdesk.com/legal/terms-of-service).
+
+## Support
+
+Questions or issues: [developer.sparrowdesk.com/mcp](https://developer.sparrowdesk.com/mcp), or open an issue on this repository.
+
 ## Local Development
 
 See [SETUP.md](./SETUP.md) for local development instructions, environment variables, and Docker setup.

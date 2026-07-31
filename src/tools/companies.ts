@@ -5,8 +5,9 @@ export function registerCompanyTools({ server, apiRequest, apiBase }: ToolContex
   server.registerTool(
     "list_companies",
     {
+      title: "List companies",
       description: "List companies in the SparrowDesk account with optional filters and cursor pagination",
-      annotations: { readOnlyHint: true },
+      annotations: { title: "List companies", readOnlyHint: true },
       inputSchema: {
         starting_after: z.string().optional().describe("Pagination cursor"),
         per_page: z.number().int().min(1).max(100).optional().describe("Items per page (1-100, default 25)"),
@@ -28,8 +29,9 @@ export function registerCompanyTools({ server, apiRequest, apiBase }: ToolContex
   server.registerTool(
     "get_company",
     {
+      title: "Get company",
       description: "Retrieve a company by ID from SparrowDesk",
-      annotations: { readOnlyHint: true },
+      annotations: { title: "Get company", readOnlyHint: true },
       inputSchema: { id: z.number().int().describe("The company ID") },
     },
     async ({ id }) => formatResult(await apiRequest(`${apiBase}/companies/${id}`))
@@ -38,8 +40,9 @@ export function registerCompanyTools({ server, apiRequest, apiBase }: ToolContex
   server.registerTool(
     "create_company",
     {
+      title: "Create company",
       description: "Create a new company in SparrowDesk",
-      annotations: { destructiveHint: false },
+      annotations: { title: "Create company", readOnlyHint: false, destructiveHint: false },
       inputSchema: {
         name: z.string().describe("Company name"),
         domain: z.string().optional().describe("Lowercase domain like example.com or company.co.uk"),
@@ -59,8 +62,9 @@ export function registerCompanyTools({ server, apiRequest, apiBase }: ToolContex
   server.registerTool(
     "update_company",
     {
+      title: "Update company",
       description: "Update an existing company in SparrowDesk",
-      annotations: { destructiveHint: false },
+      annotations: { title: "Update company", readOnlyHint: false, destructiveHint: true },
       inputSchema: {
         id: z.number().int().describe("The company ID to update"),
         name: z.string().optional().describe("Company name"),
