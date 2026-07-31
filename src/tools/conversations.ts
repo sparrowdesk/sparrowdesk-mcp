@@ -5,8 +5,9 @@ export function registerConversationTools({ server, apiRequest, apiBase }: ToolC
   server.registerTool(
     "get_conversation",
     {
+      title: "Get conversation",
       description: "Retrieve a conversation (also called a ticket) by ID from SparrowDesk",
-      annotations: { readOnlyHint: true },
+      annotations: { title: "Get conversation", readOnlyHint: true },
       inputSchema: { id: z.number().int().describe("The conversation ID") },
     },
     async ({ id }) => formatResult(await apiRequest(`${apiBase}/conversations/${id}`))
@@ -15,8 +16,9 @@ export function registerConversationTools({ server, apiRequest, apiBase }: ToolC
   server.registerTool(
     "list_conversations",
     {
+      title: "List conversations",
       description: "List conversations (also called tickets) from SparrowDesk with optional filters",
-      annotations: { readOnlyHint: true },
+      annotations: { title: "List conversations", readOnlyHint: true },
       inputSchema: {
         starting_after: z.string().optional().describe("Pagination cursor"),
         per_page: z.number().int().min(1).max(100).optional().describe("Items per page (1-100, default 25)"),
@@ -53,8 +55,9 @@ export function registerConversationTools({ server, apiRequest, apiBase }: ToolC
   server.registerTool(
     "list_conversations_with_replies",
     {
+      title: "List conversations with replies",
       description: "List conversations (tickets) with their replies inlined in one call. Uses the same filters as list_conversations. Root pages/total_count apply to conversations only; each row includes a replies object with the same shape as list_conversation_replies.",
-      annotations: { readOnlyHint: true },
+      annotations: { title: "List conversations with replies", readOnlyHint: true },
       inputSchema: {
         starting_after: z.string().optional().describe("Cursor for conversation list pagination"),
         per_page: z.number().int().min(1).max(20).optional().describe("Conversations per page (1-20, default 20)"),
@@ -97,8 +100,9 @@ export function registerConversationTools({ server, apiRequest, apiBase }: ToolC
   server.registerTool(
     "list_conversation_replies",
     {
+      title: "List conversation replies",
       description: "List all replies for a conversation (also called a ticket) in SparrowDesk",
-      annotations: { readOnlyHint: true },
+      annotations: { title: "List conversation replies", readOnlyHint: true },
       inputSchema: {
         id: z.number().int().describe("The conversation ID"),
         starting_after: z.string().optional().describe("Pagination cursor"),
@@ -122,8 +126,9 @@ export function registerConversationTools({ server, apiRequest, apiBase }: ToolC
   server.registerTool(
     "add_conversation_reply",
     {
+      title: "Add conversation reply",
       description: "Add a reply or internal note to a conversation (also called a ticket) in SparrowDesk",
-      annotations: { destructiveHint: false },
+      annotations: { title: "Add conversation reply", readOnlyHint: false, destructiveHint: true },
       inputSchema: {
         id: z.number().int().describe("The conversation ID"),
         reply_text: z.string().describe("The content of the reply message"),
@@ -139,8 +144,9 @@ export function registerConversationTools({ server, apiRequest, apiBase }: ToolC
   server.registerTool(
     "create_conversation",
     {
+      title: "Create conversation",
       description: "Create a new conversation (also called a ticket) in SparrowDesk",
-      annotations: { destructiveHint: false },
+      annotations: { title: "Create conversation", readOnlyHint: false, destructiveHint: false },
       inputSchema: {
         subject: z.string().describe("Conversation subject"),
         description: z.string().describe("Conversation description"),
@@ -177,8 +183,9 @@ export function registerConversationTools({ server, apiRequest, apiBase }: ToolC
   server.registerTool(
     "update_conversation",
     {
+      title: "Update conversation",
       description: "Update an existing conversation (subject, status, priority, assignment, custom fields)",
-      annotations: { destructiveHint: false },
+      annotations: { title: "Update conversation", readOnlyHint: false, destructiveHint: true },
       inputSchema: {
         id: z.number().int().describe("The conversation ID"),
         subject: z.string().optional().describe("New subject"),
@@ -210,8 +217,9 @@ export function registerConversationTools({ server, apiRequest, apiBase }: ToolC
   server.registerTool(
     "delete_conversation",
     {
+      title: "Delete conversation",
       description: "Delete a conversation by ID from SparrowDesk",
-      annotations: { destructiveHint: true },
+      annotations: { title: "Delete conversation", readOnlyHint: false, destructiveHint: true },
       inputSchema: { id: z.number().int().describe("The conversation ID to delete") },
     },
     async ({ id }) => formatResult(await apiRequest(`${apiBase}/conversations/${id}`, { method: "DELETE" }))
@@ -220,8 +228,9 @@ export function registerConversationTools({ server, apiRequest, apiBase }: ToolC
   server.registerTool(
     "list_conversation_fields",
     {
+      title: "List conversation fields",
       description: "List conversation (ticket) custom fields",
-      annotations: { readOnlyHint: true },
+      annotations: { title: "List conversation fields", readOnlyHint: true },
       inputSchema: {
         starting_after: z.string().optional().describe("Pagination cursor"),
         per_page: z.number().int().min(1).max(100).optional().describe("Items per page (1-100, default 25)"),
@@ -243,8 +252,9 @@ export function registerConversationTools({ server, apiRequest, apiBase }: ToolC
   server.registerTool(
     "get_conversation_field",
     {
+      title: "Get conversation field",
       description: "Retrieve a single conversation field definition by ID",
-      annotations: { readOnlyHint: true },
+      annotations: { title: "Get conversation field", readOnlyHint: true },
       inputSchema: { id: z.number().int().describe("Conversation field ID") },
     },
     async ({ id }) => formatResult(await apiRequest(`${apiBase}/conversations/fields/${id}`))
@@ -253,8 +263,9 @@ export function registerConversationTools({ server, apiRequest, apiBase }: ToolC
   server.registerTool(
     "create_conversation_field",
     {
+      title: "Create conversation field",
       description: "Create a custom conversation field (dropdown types require field_options)",
-      annotations: { destructiveHint: false },
+      annotations: { title: "Create conversation field", readOnlyHint: false, destructiveHint: false },
       inputSchema: {
         name: z.string().describe("Display name"),
         type: z.enum(["single_line_text", "multi_line_text", "dropdown", "number", "date", "email"]).describe("Field type"),
@@ -277,8 +288,9 @@ export function registerConversationTools({ server, apiRequest, apiBase }: ToolC
   server.registerTool(
     "update_conversation_field",
     {
+      title: "Update conversation field",
       description: "Update a conversation field (name, description, active flag, dropdown options, etc.)",
-      annotations: { destructiveHint: false },
+      annotations: { title: "Update conversation field", readOnlyHint: false, destructiveHint: true },
       inputSchema: {
         id: z.number().int().describe("Conversation field ID"),
         name: z.string().optional(),

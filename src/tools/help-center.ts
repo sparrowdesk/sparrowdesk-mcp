@@ -5,8 +5,9 @@ export function registerHelpCenterTools({ server, apiRequest, apiBase }: ToolCon
   server.registerTool(
     "list_helpcenters",
     {
+      title: "List help centers",
       description: "List Knowledge Base help centers for the account (needed for helpCenterId on articles/collections)",
-      annotations: { readOnlyHint: true },
+      annotations: { title: "List help centers", readOnlyHint: true },
       inputSchema: {},
     },
     async () => formatResult(await apiRequest(`${apiBase}/helpcenters`))
@@ -15,8 +16,9 @@ export function registerHelpCenterTools({ server, apiRequest, apiBase }: ToolCon
   server.registerTool(
     "list_articles",
     {
+      title: "List Knowledge Base articles",
       description: "List KB articles for a help center; use published/draft/archived flags to filter lifecycle",
-      annotations: { readOnlyHint: true },
+      annotations: { title: "List Knowledge Base articles", readOnlyHint: true },
       inputSchema: {
         helpCenterId: z.number().int().describe("Help center id from list_helpcenters"),
         published: z.boolean().optional().describe("Include published articles"),
@@ -45,8 +47,9 @@ export function registerHelpCenterTools({ server, apiRequest, apiBase }: ToolCon
   server.registerTool(
     "get_article",
     {
+      title: "Get Knowledge Base article",
       description: "Get a single Knowledge Base article by ID",
-      annotations: { readOnlyHint: true },
+      annotations: { title: "Get Knowledge Base article", readOnlyHint: true },
       inputSchema: { id: z.number().int().describe("Article ID") },
     },
     async ({ id }) => formatResult(await apiRequest(`${apiBase}/articles/${id}`))
@@ -55,12 +58,13 @@ export function registerHelpCenterTools({ server, apiRequest, apiBase }: ToolCon
   server.registerTool(
     "create_article",
     {
+      title: "Create Knowledge Base article",
       description: "Create a KB article (draft). Set publish true with collectionId and isPublic to publish in one step",
-      annotations: { destructiveHint: false },
+      annotations: { title: "Create Knowledge Base article", readOnlyHint: false, destructiveHint: false },
       inputSchema: {
-        helpCenterId: z.number().int(),
-        brandId: z.number().int(),
-        title: z.string().optional(),
+        helpCenterId: z.number().int().describe("Help center id from list_helpcenters"),
+        brandId: z.number().int().describe("Brand id the article belongs to"),
+        title: z.string().optional().describe("Article title"),
         content: z.string().optional().describe("HTML content; server converts to internal format"),
         publish: z.boolean().optional().describe("When true, requires collectionId and isPublic"),
         collectionId: z.number().int().optional().describe("Required when publish is true"),
@@ -81,18 +85,19 @@ export function registerHelpCenterTools({ server, apiRequest, apiBase }: ToolCon
   server.registerTool(
     "update_article",
     {
+      title: "Update Knowledge Base article",
       description: "Update a KB article draft; set publish true with isPublic to publish after save",
-      annotations: { destructiveHint: false },
+      annotations: { title: "Update Knowledge Base article", readOnlyHint: false, destructiveHint: true },
       inputSchema: {
         id: z.number().int().describe("Article ID"),
-        title: z.string().optional(),
+        title: z.string().optional().describe("Article title"),
         content: z.string().optional().describe("HTML content"),
         collectionId: z.number().int().nullable().optional().describe("Move to another collection; null removes from collection"),
-        brandId: z.number().int().optional(),
-        publish: z.boolean().optional(),
+        brandId: z.number().int().optional().describe("Brand id the article belongs to"),
+        publish: z.boolean().optional().describe("When true, publishes the article after saving"),
         isPublic: z.boolean().optional().describe("Required when publish is true"),
-        aiAgentEnabled: z.boolean().optional(),
-        aiCopilotEnabled: z.boolean().optional(),
+        aiAgentEnabled: z.boolean().optional().describe("Allow the AI agent to use this article"),
+        aiCopilotEnabled: z.boolean().optional().describe("Allow AI copilot to use this article"),
       },
     },
     async ({ id, title, content, collectionId, brandId, publish, isPublic, aiAgentEnabled, aiCopilotEnabled }) => {
@@ -115,8 +120,9 @@ export function registerHelpCenterTools({ server, apiRequest, apiBase }: ToolCon
   server.registerTool(
     "archive_article",
     {
+      title: "Archive Knowledge Base article",
       description: "Archive a Knowledge Base article (hidden from the help center, not deleted)",
-      annotations: { destructiveHint: false },
+      annotations: { title: "Archive Knowledge Base article", readOnlyHint: false, destructiveHint: true },
       inputSchema: { id: z.number().int().describe("Article ID") },
     },
     async ({ id }) => formatResult(await apiRequest(`${apiBase}/articles/${id}/archive`, { method: "PATCH", body: {} }))
@@ -125,12 +131,13 @@ export function registerHelpCenterTools({ server, apiRequest, apiBase }: ToolCon
   server.registerTool(
     "list_collections",
     {
+      title: "List Knowledge Base collections",
       description: "List KB collections for a help center (nested tree by default; use isRoot or collectionId for other views)",
-      annotations: { readOnlyHint: true },
+      annotations: { title: "List Knowledge Base collections", readOnlyHint: true },
       inputSchema: {
-        helpCenterId: z.number().int(),
-        page: z.number().int().min(1).optional(),
-        limit: z.number().int().min(1).max(100).optional(),
+        helpCenterId: z.number().int().describe("Help center id from list_helpcenters"),
+        page: z.number().int().min(1).optional().describe("Page number (default 1)"),
+        limit: z.number().int().min(1).max(100).optional().describe("Page size (max 100)"),
         collectionId: z.number().int().optional().describe("Parent collection ID - returns its direct children only"),
         isRoot: z.boolean().optional().describe("When true without collectionId, only root collections (flat)"),
       },
@@ -149,12 +156,13 @@ export function registerHelpCenterTools({ server, apiRequest, apiBase }: ToolCon
   server.registerTool(
     "get_collection",
     {
+      title: "Get Knowledge Base collection",
       description: "Get a KB collection by ID with direct subcollections and paginated articles",
-      annotations: { readOnlyHint: true },
+      annotations: { title: "Get Knowledge Base collection", readOnlyHint: true },
       inputSchema: {
         id: z.number().int().describe("Collection ID"),
-        page: z.number().int().min(1).optional(),
-        limit: z.number().int().min(1).max(100).optional(),
+        page: z.number().int().min(1).optional().describe("Article page number (default 1)"),
+        limit: z.number().int().min(1).max(100).optional().describe("Articles per page (max 100)"),
       },
     },
     async ({ id, page, limit }) => {
@@ -169,13 +177,14 @@ export function registerHelpCenterTools({ server, apiRequest, apiBase }: ToolCon
   server.registerTool(
     "create_collection",
     {
+      title: "Create Knowledge Base collection",
       description: "Create a KB collection under a help center (optionally nested under parentCollectionId)",
-      annotations: { destructiveHint: false },
+      annotations: { title: "Create Knowledge Base collection", readOnlyHint: false, destructiveHint: false },
       inputSchema: {
-        name: z.string(),
-        helpCenterId: z.number().int(),
-        brandId: z.number().int(),
-        description: z.string().optional(),
+        name: z.string().describe("Collection name"),
+        helpCenterId: z.number().int().describe("Help center id from list_helpcenters"),
+        brandId: z.number().int().describe("Brand id the collection belongs to"),
+        description: z.string().optional().describe("Collection description"),
         parentCollectionId: z.number().int().optional().describe("Create as child of this collection"),
       },
     },
