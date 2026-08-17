@@ -1,0 +1,31 @@
+# Backstage catalog entry — https://backstage.io/docs/features/software-catalog/descriptor-format
+#
+# Discovered by Sparrow Launchpad's `sparrowdesk` GitHub provider
+# (org=sparrowdesk, branch=main, topic=sparrow-bootstrap).
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: sparrowdesk-mcp
+  description: SparrowDesk MCP (Model Context Protocol server)
+  annotations:
+    # Multi-env dashboard opt-in — maps to `envDashboards.sparrowdeskService`
+    # (shared coalition for Services-pattern apps).
+    sparrow.io/env-dashboard: sparrowdesk-service
+
+    # Per-entity coordinates — the shared templates substitute `{app.name}`
+    # with the entity name (mcp), which naturally matches namespace,
+    # container prefix, deployment name, and ArgoCD app suffix for this app.
+    # These fields override the derived defaults where necessary.
+    sparrow.io/jenkins-app: MCP
+    sparrow.io/config-path: mcp
+    sparrow.io/vault-path: mcp
+    sparrow.io/repo: sparrowdesk-mcp
+    sparrow.io/staging-namespace: mcp
+    sparrow.io/production-namespace: mcp
+    sparrow.io/has-vault: 'true'
+
+    github.com/project-slug: sparrowdesk/sparrowdesk-mcp
+spec:
+  type: service
+  lifecycle: production
+  owner: group:default/sparrowdesk-team
