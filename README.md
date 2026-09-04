@@ -1,12 +1,45 @@
 # SparrowDesk MCP Server
 
-A [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server for [SparrowDesk](https://sparrowdesk.com). Connect AI assistants like Claude to your SparrowDesk account to read and manage tickets, contacts, Knowledge Base content, tags, companies, and team data.
+A [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server for [SparrowDesk](https://sparrowdesk.com). Connect AI assistants like Claude to your SparrowDesk account to read and manage tickets, contacts, companies, Knowledge Base content, tags, and team data.
 
-Authentication is handled via OAuth — no API keys to manage. Your MCP client will open a browser window to log in with your SparrowDesk account the first time you connect.
+You sign in with OAuth, so there are no API keys to manage. The first time you connect, your MCP client opens a browser window to log in with your SparrowDesk account.
+
+## Install
+
+The server URL is the same for every user — your account comes from the OAuth token, not the URL:
+
+```
+https://mcp.sparrowdesk.com/mcp
+```
+
+**Claude Code:**
+
+```bash
+claude mcp add --transport http sparrowdesk https://mcp.sparrowdesk.com/mcp
+```
+
+**Claude Desktop** (`claude_desktop_config.json`) and **Cursor** (`~/.cursor/mcp.json`) take the same block:
+
+```json
+{
+  "mcpServers": {
+    "sparrowdesk": {
+      "type": "http",
+      "url": "https://mcp.sparrowdesk.com/mcp"
+    }
+  }
+}
+```
+
+Restart the app after saving. The SparrowDesk tools appear in the tool list, and the client opens a browser window to complete the OAuth login.
+
+## Permissions
+
+Tools mirror the [SparrowDesk Developer API](https://api.sparrowdesk.com/public-api/swagger.json), and each call runs under the permissions of the account you signed in with.
+
+Knowledge Base tools need the collection and article scopes: `VIEW_COLLECTIONS` and `MANAGE_COLLECTIONS` for collections, `VIEW_ARTICLES` and `MANAGE_ARTICLES` for articles. All four are included in the MCP default scope list. Other Knowledge Base behavior can depend on further scopes or account features.
 
 ## Available Tools
-
-Tools mirror the [SparrowDesk Developer API](https://api.sparrowdesk.com/public-api/swagger.json). Knowledge Base collections and related endpoints require **`VIEW_COLLECTIONS`** and **`MANAGE_COLLECTIONS`** (included in the MCP default OAuth scope list). Other KB behavior may still depend on additional scopes or account features.
 
 | Tool | Description |
 |------|-------------|
@@ -54,60 +87,18 @@ Tools mirror the [SparrowDesk Developer API](https://api.sparrowdesk.com/public-
 | `update_article` | Update an article draft / publish |
 | `archive_article` | Archive an article |
 
-## Installing in Claude
-
-Add to your `claude_desktop_config.json`:
-
-```json
-{
-  "mcpServers": {
-    "sparrowdesk": {
-      "type": "http",
-      "url": "https://mcp.sparrowdesk.com/mcp"
-    }
-  }
-}
-```
-
-Or with Claude Code:
-
-```bash
-claude mcp add --transport http sparrowdesk https://mcp.sparrowdesk.com/mcp
-```
-
-## Installing in Cursor
-
-Edit `~/.cursor/mcp.json`:
-
-```json
-{
-  "mcpServers": {
-    "sparrowdesk": {
-      "type": "http",
-      "url": "https://mcp.sparrowdesk.com/mcp"
-    }
-  }
-}
-```
-
-Restart Cursor after saving. The SparrowDesk tools will appear in the Agent tool list. Cursor will open a browser window to complete the OAuth login with your SparrowDesk account.
-
 ## Tool Reference
 
-### `get_conversation`
+### Conversations
 
-Fetch a single conversation by its numeric ID.
+#### `get_conversation`
 
-**Parameters:**
-- `id` (integer, required) — The conversation ID
+Fetch a single conversation by its numeric ID. Parameters: `id` (integer, required).
 
----
-
-### `list_conversations`
+#### `list_conversations`
 
 List conversations with optional filters, sorting, and pagination.
 
-**Parameters:**
 - `starting_after` (string, optional) — Pagination cursor
 - `per_page` (integer, optional) — Items per page, 1–100 (default: 25)
 - `status` (array, optional) — Filter by status: `Open`, `Pending`, `Resolved`, `Closed`
@@ -120,13 +111,10 @@ List conversations with optional filters, sorting, and pagination.
 - `sort_by` (string, optional) — `created_at` or `updated_at` (default: `created_at`)
 - `sort_order` (string, optional) — `asc` or `desc` (default: `desc`)
 
----
+#### `list_conversations_with_replies`
 
-### `list_conversations_with_replies`
+List conversations with their replies inlined in a single call. It takes the same filters as `list_conversations` plus reply controls. Root `pages` and `total_count` apply to conversations only; each row carries a `replies` object shaped like `list_conversation_replies`.
 
-List conversations with their replies inlined in a single call — the same filters as `list_conversations`, plus reply controls. Root `pages` / `total_count` apply to conversations only; each row carries a `replies` object shaped like `list_conversation_replies`.
-
-**Parameters:**
 - `starting_after` (string, optional) — Cursor for conversation list pagination
 - `per_page` (integer, optional) — Conversations per page, 1–20 (default: 20)
 - `replies_per_page` (integer, optional) — Replies per conversation, 1–50 (default: 50)
@@ -137,152 +125,85 @@ List conversations with their replies inlined in a single call — the same filt
 - `sort_by` (string, optional) — `created_at` or `updated_at` (default: `created_at`)
 - `sort_order` (string, optional) — `asc` or `desc` (default: `desc`)
 
----
-
-### `update_conversation`
-
-Patch an existing conversation.
-
-**Parameters:**
-- `id` (integer, required) — Conversation ID
-- `subject`, `priority`, `status`, `assignee` (email), `team` (string) — Optional updates
-- `custom_fields` (array, optional) — `{ internal_name, value }` (values as strings)
-
----
-
-### `delete_conversation`
-
-Delete a conversation by ID.
-
-**Parameters:**
-- `id` (integer, required)
-
----
-
-### `list_conversation_replies`
+#### `list_conversation_replies`
 
 List replies for a conversation, with optional filtering and pagination.
 
-**Parameters:**
 - `id` (integer, required) — The conversation ID
 - `starting_after` (string, optional) — Pagination cursor
 - `per_page` (integer, optional) — Items per page, 1–100 (default: 25)
 - `type` (string, optional) — Filter by `INTERNAL_NOTE` or `REPLY`
 - `sort_order` (string, optional) — `asc` or `desc` (default: `desc`)
 
----
-
-### `add_conversation_reply`
+#### `add_conversation_reply`
 
 Add a reply or internal note to a conversation.
 
-**Parameters:**
 - `id` (integer, required) — The conversation ID
 - `reply_text` (string, required) — The content of the reply message
-- `type` (string, required) — `REPLY` (visible to customer) or `INTERNAL_NOTE` (agents only)
+- `type` (string, required) — `REPLY` (visible to the customer) or `INTERNAL_NOTE` (agents only)
 
----
-
-### `create_conversation`
+#### `create_conversation`
 
 Create a new conversation/ticket in SparrowDesk.
 
-**Parameters:**
 - `subject` (string, required) — Conversation subject
 - `description` (string, required) — Conversation description
 - `requested_by` (string, required) — Email or phone number of the requester
 - `priority` (string, optional) — `Low`, `Medium`, `High`, or `Urgent` (default: `Medium`)
 - `source` (string, optional) — `Mail` or `Call` (default: `Call`)
 - `status` (string, optional) — `Open`, `Pending`, `Resolved`, or `Closed` (default: `Open`)
-- `brand_id` (integer, optional) — Brand ID (uses account default if omitted)
+- `brand_id` (integer, optional) — Brand ID (uses the account default if omitted)
 - `assignee` (string, optional) — Agent email address to assign the conversation to
 - `team_id` (integer, optional) — Team ID to assign the conversation to
 - `custom_fields` (array, optional) — Array of `{ internal_name, value }` objects
 
----
+#### `update_conversation`
 
-### Conversation field tools
+Patch an existing conversation.
 
-- **`list_conversation_fields`** — `starting_after`, `per_page`, `is_active`, `is_default`
-- **`get_conversation_field`** — `id`
-- **`create_conversation_field`** — `name`, `type` (`single_line_text` | `multi_line_text` | `dropdown` | `number` | `date` | `email`), optional `internal_name`, `description`, `is_mandatory_on_close`, `field_options` (required for dropdowns)
-- **`update_conversation_field`** — `id` plus any of `name`, `description`, `is_active`, `is_mandatory_on_close`, `field_options`
+- `id` (integer, required) — Conversation ID
+- `subject`, `priority`, `status`, `assignee` (email), `team` (string) — Optional updates
+- `custom_fields` (array, optional) — `{ internal_name, value }` (values as strings)
 
----
+#### `delete_conversation`
 
-### `list_contacts`
+Delete a conversation. Parameters: `id` (integer, required).
 
-List contacts with filters (requires **view contacts** scope where enforced).
+### Conversation fields
 
-**Parameters:** `search`, `requested_by_email`, `requested_by_phone`, `starting_after`, `per_page`
+- `list_conversation_fields` — `starting_after`, `per_page`, `is_active`, `is_default`
+- `get_conversation_field` — `id`
+- `create_conversation_field` — `name`, `type` (`single_line_text` | `multi_line_text` | `dropdown` | `number` | `date` | `email`), optional `internal_name`, `description`, `is_mandatory_on_close`, `field_options` (required for dropdowns)
+- `update_conversation_field` — `id` plus any of `name`, `description`, `is_active`, `is_mandatory_on_close`, `field_options`
 
----
+### Contacts
 
-### `delete_contact`
+#### `list_contacts`
 
-**Parameters:** `id` (integer, required)
+List contacts with filters. Requires the view contacts scope where the account enforces it.
 
----
+Parameters: `search`, `requested_by_email`, `requested_by_phone`, `starting_after`, `per_page`.
 
-### `bulk_create_contacts` / `get_bulk_job_status`
+#### `get_contact`
 
-Bulk create accepts `contacts`: array of objects with optional `first_name`, `last_name`, `email`, `phone`, `company_id`, `custom_fields`. Response includes `job_id`. Poll **`get_bulk_job_status`** with `job_id` until `completed` or `failed`.
+Fetch a single contact by its numeric ID. Parameters: `id` (integer, required).
 
----
+#### `create_contact`
 
-### `list_companies`
+Create a new contact. Give either `email` or `phone`.
 
-**Parameters:** `starting_after`, `per_page`, `domain` (exact), `name` (exact)
-
----
-
-### `get_company`
-
-**Parameters:** `id` (integer, required)
-
----
-
-### `create_company`
-
-Create a new company.
-
-**Parameters:**
-- `name` (string, required) — Company name
-- `domain` (string, optional) — Lowercase domain like `example.com`
-- `address` (string, optional) — Company address
-- `notes` (string, optional) — Free-form notes
-
----
-
-### `update_company`
-
-Update an existing company. At least one field must be provided.
-
-**Parameters:**
-- `id` (integer, required) — The company ID to update
-- `name`, `domain`, `phone`, `address`, `notes` — Optional updates
-
----
-
-### `create_contact`
-
-Create a new contact. Either `email` or `phone` must be provided.
-
-**Parameters:**
 - `first_name` (string, required) — Contact's first name
 - `last_name` (string, optional) — Contact's last name
-- `email` (string, optional) — Contact's email address (required if phone not provided)
-- `phone` (string, optional) — Contact's phone number (required if email not provided)
+- `email` (string, optional) — Contact's email address (required if `phone` is omitted)
+- `phone` (string, optional) — Contact's phone number (required if `email` is omitted)
 - `company_id` (integer, optional) — ID of the company to associate with
 - `custom_fields` (object, optional) — Custom field key-value pairs
 
----
-
-### `update_contact`
+#### `update_contact`
 
 Update an existing contact.
 
-**Parameters:**
 - `id` (integer, required) — The contact ID to update
 - `first_name` (string, optional) — Contact's first name
 - `last_name` (string, optional) — Contact's last name
@@ -292,77 +213,93 @@ Update an existing contact.
 - `blocked` (boolean, optional) — Whether the contact is blocked
 - `custom_fields` (object, optional) — Custom field key-value pairs
 
----
+#### `delete_contact`
 
-### `get_contact`
+Delete a contact. Parameters: `id` (integer, required).
 
-Fetch a single contact by its numeric ID.
+#### `bulk_create_contacts` and `get_bulk_job_status`
 
-**Parameters:**
-- `id` (integer, required) — The contact ID
+`bulk_create_contacts` accepts `contacts`: an array of objects with optional `first_name`, `last_name`, `email`, `phone`, `company_id`, and `custom_fields`. The response includes a `job_id`. Poll `get_bulk_job_status` with that `job_id` until the job reports `completed` or `failed`.
 
----
+### Contact fields
 
-### `list_contact_fields`
+#### `list_contact_fields`
 
 Retrieve all contact fields defined in the account.
 
-**Parameters:**
 - `search` (string, optional) — Search contact fields by name
 - `page` (integer, optional) — Page number for pagination
 - `limit` (integer, optional) — Results per page
 
----
+### Companies
 
-### `list_members`
+#### `list_companies`
+
+Parameters: `starting_after`, `per_page`, `domain` (exact), `name` (exact).
+
+#### `get_company`
+
+Fetch a single company by its numeric ID. Parameters: `id` (integer, required).
+
+#### `create_company`
+
+Create a new company.
+
+- `name` (string, required) — Company name
+- `domain` (string, optional) — Lowercase domain like `example.com`
+- `address` (string, optional) — Company address
+- `notes` (string, optional) — Free-form notes
+
+#### `update_company`
+
+Update an existing company. Give at least one field besides `id`.
+
+- `id` (integer, required) — The company ID to update
+- `name`, `domain`, `phone`, `address`, `notes` — Optional updates
+
+### Knowledge Base
+
+Call `list_helpcenters` first to get a `helpCenterId`. Collections and articles are scoped per help center and brand.
+
+Reads need `VIEW_COLLECTIONS` / `VIEW_ARTICLES`; writes need `MANAGE_COLLECTIONS` / `MANAGE_ARTICLES`.
+
+- `list_helpcenters` — no parameters
+- `list_collections` — `helpCenterId` (required); optional `page`, `limit`, `collectionId`, `isRoot` — needs `VIEW_COLLECTIONS`
+- `get_collection` — `id`; optional `page`, `limit` for articles — needs `VIEW_COLLECTIONS`
+- `create_collection` — `name`, `helpCenterId`, `brandId`; optional `description`, `parentCollectionId` — needs `MANAGE_COLLECTIONS`
+- `list_articles` — `helpCenterId` (required); optional `published`, `draft`, `archived`, `page`, `limit`, `search`, `collectionId` — needs `VIEW_ARTICLES`
+- `get_article` — `id` — needs `VIEW_ARTICLES`
+- `create_article` — `helpCenterId`, `brandId`; optional `title`, `content` (HTML), `publish`, `collectionId`, `isPublic` (publish flow per the API docs) — needs `MANAGE_ARTICLES`
+- `update_article` — `id`; optional `title`, `content`, `collectionId` (null to remove from collection), `brandId`, `publish`, `isPublic`, `aiAgentEnabled`, `aiCopilotEnabled` — needs `MANAGE_ARTICLES`
+- `archive_article` — `id` — needs `MANAGE_ARTICLES`
+
+### Account
+
+#### `get_me`
+
+Retrieve current SparrowDesk account information: account ID, subdomain, domain, company name, timezone, and language. This is the account, not a user profile. Takes no parameters.
+
+#### `list_members`
 
 Retrieve a paginated list of all team members in the account.
 
-**Parameters:**
 - `starting_after` (string, optional) — Pagination cursor
 - `per_page` (integer, optional) — Items per page, 1–100 (default: 25)
 
----
+#### `list_tags`
 
-### `get_me`
-
-Retrieve current SparrowDesk **account** information (not a user profile).
-
-**Parameters:** None
-
----
-
-### `list_tags`
-
-**Parameters:** `starting_after`, `per_page`, `search`
-
----
-
-### Knowledge Base tools
-
-Use **`list_helpcenters`** first to obtain `helpCenterId`. Collections and articles are scoped per help center and brand.
-
-- **`list_collections`** — `helpCenterId` (required); optional `page`, `limit`, `collectionId`, `isRoot`
-- **`get_collection`** — `id`; optional `page`, `limit` for articles
-- **`create_collection`** — `name`, `helpCenterId`, `brandId`; optional `description`, `parentCollectionId`
-- **`list_articles`** — `helpCenterId` (required); optional `published`, `draft`, `archived`, `page`, `limit`, `search`, `collectionId`
-- **`get_article`** — `id`
-- **`create_article`** — `helpCenterId`, `brandId`; optional `title`, `content` (HTML), `publish`, `collectionId`, `isPublic` (publish flow per API docs)
-- **`update_article`** — `id`; optional `title`, `content`, `collectionId` (null to remove from collection), `brandId`, `publish`, `isPublic`, `aiAgentEnabled`, `aiCopilotEnabled`
-- **`archive_article`** — `id`
-
----
+Parameters: `starting_after`, `per_page`, `search`.
 
 ## Privacy Policy
 
-This server proxies requests to the SparrowDesk API on behalf of the signed-in user. It stores no ticket, contact, or Knowledge Base content — only in-memory OAuth session state (access and refresh tokens), which is discarded when the process restarts. What the server can read or write is bounded by the permissions of the SparrowDesk account you sign in with, and every action is recorded against your user in SparrowDesk.
+This server proxies requests to the SparrowDesk API on behalf of the signed-in user. It stores no ticket, contact, or Knowledge Base content, only in-memory OAuth session state (access and refresh tokens), which it discards when the process restarts. What the server can read or write is bounded by the permissions of the SparrowDesk account you sign in with, and SparrowDesk records every action against your user.
 
 Data collection, storage, retention, third-party sharing, and contact details are covered in the [SparrowDesk Privacy Policy](https://www.sparrowdesk.com/legal/privacy-policy). Use of SparrowDesk is governed by the [Terms of Service](https://www.sparrowdesk.com/legal/terms-of-service).
 
 ## Support
 
-Questions or issues: [developer.sparrowdesk.com/mcp](https://developer.sparrowdesk.com/mcp), or open an issue on this repository.
+For questions, see [developer.sparrowdesk.com/mcp](https://developer.sparrowdesk.com/mcp) or open an issue on this repository.
 
 ## Local Development
 
-See [SETUP.md](./SETUP.md) for local development instructions, environment variables, and Docker setup.
+See [SETUP.md](./SETUP.md) for running the server locally, the environment variables it reads, Docker, and how to call the deployed server with curl.

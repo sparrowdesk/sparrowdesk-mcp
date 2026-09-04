@@ -1,4 +1,4 @@
-# SparrowDesk MCP — Setup & Testing Guide
+# SparrowDesk MCP Setup and Testing
 
 ## Local Development
 
@@ -8,14 +8,29 @@
 npm install
 ```
 
-### 2. Configure environment variables
+### 2. Create a `.env` file
+
+`npm run dev` loads `.env` from the repo root, so put your config there rather than exporting it in your shell:
 
 ```bash
-export SPARROWDESK_CLIENT_ID=your_client_id
-export SPARROWDESK_CLIENT_SECRET=your_client_secret
-export SPARROWDESK_OAUTH_ISSUER=https://app.sparrowdesk.com
-export MCP_PUBLIC_URL=http://localhost:3000
+SPARROWDESK_CLIENT_ID=your_client_id
+SPARROWDESK_CLIENT_SECRET=your_client_secret
+SPARROWDESK_OAUTH_ISSUER=https://app.sparrowdesk.com
+MCP_PUBLIC_URL=http://localhost:3000
 ```
+
+The server exits at startup if `SPARROWDESK_CLIENT_ID`, `SPARROWDESK_CLIENT_SECRET`, or `SPARROWDESK_OAUTH_ISSUER` is missing, and logs the config it resolved.
+
+`MCP_PUBLIC_URL` is optional, but set it anyway. It defaults to `https://mcp.campaignsparrow.com`, and the OAuth discovery endpoints advertise that value verbatim, so clients get sent to the wrong host.
+
+Other optional variables:
+
+| Variable | Default |
+|---|---|
+| `PORT` | `3000` |
+| `SPARROWDESK_API_BASE` | `https://api.sparrowdesk.com/v1` |
+| `SPARROWDESK_OAUTH_AUTHORIZE_URL` | `{ISSUER}/oauth/authorize` |
+| `SPARROWDESK_OAUTH_TOKEN_URL` | `{ISSUER}/oauth/token` |
 
 ### 3. Run the server
 
@@ -23,29 +38,16 @@ export MCP_PUBLIC_URL=http://localhost:3000
 npm run dev
 ```
 
-The server starts at `http://localhost:3000`. Verify it's running:
+It listens on `http://localhost:3000`. Check it came up:
 
 ```bash
 curl http://localhost:3000/health
 # {"status":"ok"}
 ```
 
-### 4. Configure your MCP client
+### 4. Point your MCP client at it
 
-**Cursor** (`~/.cursor/mcp.json`):
-
-```json
-{
-  "mcpServers": {
-    "sparrowdesk": {
-      "type": "http",
-      "url": "http://localhost:3000/mcp"
-    }
-  }
-}
-```
-
-**Claude Code** (`.mcp.json` in project root or `~/.claude/mcp.json`):
+**Cursor** (`~/.cursor/mcp.json`) or **Claude Code** (`.mcp.json` in the project root, or `~/.claude/mcp.json`):
 
 ```json
 {
@@ -58,60 +60,35 @@ curl http://localhost:3000/health
 }
 ```
 
-Your MCP client will open a browser window to complete the OAuth login with your SparrowDesk account.
+Your client opens a browser window to complete the OAuth login with your SparrowDesk account.
 
----
+## Docker
 
-## Deployed Server
+The image builds TypeScript and runs `dist/index.js` on port 3000. It reads no `.env` of its own, so pass the config in:
 
-The server is live at `https://mcp.sparrowdesk.com`.
+```bash
+docker build -t sparrowdesk-mcp .
+docker run --rm -p 3000:3000 --env-file .env sparrowdesk-mcp
+```
 
-### 1. Verify the server is up
+## Testing the Deployed Server
+
+The server is live at `https://mcp.sparrowdesk.com`. To use it from a client, follow [the install steps in the README](./README.md#install). The rest of this section is for poking at it directly.
+
+Check it's up:
 
 ```bash
 curl https://mcp.sparrowdesk.com/health
 # {"status":"ok"}
 ```
 
-### 2. Configure your MCP client
-
-**Cursor** (`~/.cursor/mcp.json`):
-
-```json
-{
-  "mcpServers": {
-    "sparrowdesk": {
-      "type": "http",
-      "url": "https://mcp.sparrowdesk.com/mcp"
-    }
-  }
-}
-```
-
-**Claude Code** (`.mcp.json` in project root or `~/.claude/mcp.json`):
-
-```json
-{
-  "mcpServers": {
-    "sparrowdesk": {
-      "type": "http",
-      "url": "https://mcp.sparrowdesk.com/mcp"
-    }
-  }
-}
-```
-
-Your MCP client will open a browser window to complete the OAuth login with your SparrowDesk account.
-
-### 3. Test the OAuth discovery endpoint
+Check OAuth discovery:
 
 ```bash
 curl https://mcp.sparrowdesk.com/.well-known/oauth-authorization-server
 ```
 
-### 4. Test a tool call directly
-
-Once you have an OAuth access token, you can test tool calls directly:
+List the tools. This needs an OAuth access token, which you get by connecting once from an MCP client:
 
 ```bash
 curl -X POST https://mcp.sparrowdesk.com/mcp \
@@ -125,7 +102,7 @@ curl -X POST https://mcp.sparrowdesk.com/mcp \
   }'
 ```
 
-### 5. Test a specific tool
+Call one tool:
 
 ```bash
 curl -X POST https://mcp.sparrowdesk.com/mcp \
@@ -142,20 +119,6 @@ curl -X POST https://mcp.sparrowdesk.com/mcp \
   }'
 ```
 
----
+`/mcp` is rate limited to 100 requests per minute per IP, and the OAuth endpoints to 50 per 15 minutes.
 
-## Available Tools
-
-| Tool | Description |
-|------|-------------|
-| `get_conversation` | Retrieve a conversation by ID |
-| `list_conversations` | List conversations with optional filters |
-| `list_conversation_replies` | List replies for a conversation |
-| `add_conversation_reply` | Add a reply or internal note to a conversation |
-| `create_conversation` | Create a new conversation/ticket |
-| `get_contact` | Retrieve a contact by ID |
-| `create_contact` | Create a new contact |
-| `update_contact` | Update an existing contact |
-| `list_contact_fields` | List all contact fields |
-| `list_members` | List all team members |
-| `get_me` | Retrieve the currently authenticated member's profile |
+For the full list of 36 tools and their parameters, see the [tool reference in the README](./README.md#tool-reference).
