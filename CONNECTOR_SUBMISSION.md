@@ -129,8 +129,8 @@ Productivity. Add Knowledge management / Content if offered.
 
 **What users need first:** a SparrowDesk account, and a user whose role grants
 the relevant permissions (viewing and editing tickets, contacts, and — for
-Knowledge Base tools — collections). The connector requests these scopes at
-sign-in; the account's own permissions still apply on every call.
+Knowledge Base tools — collections and articles). The connector requests these
+scopes at sign-in; the account's own permissions still apply on every call.
 
 **Reads or writes:** both.
 

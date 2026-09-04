@@ -17,7 +17,7 @@ export function registerHelpCenterTools({ server, apiRequest, apiBase }: ToolCon
     "list_articles",
     {
       title: "List Knowledge Base articles",
-      description: "List KB articles for a help center; use published/draft/archived flags to filter lifecycle",
+      description: "List KB articles for a help center; use published/draft/archived flags to filter lifecycle (requires VIEW_ARTICLES scope)",
       annotations: { title: "List Knowledge Base articles", readOnlyHint: true },
       inputSchema: {
         helpCenterId: z.number().int().describe("Help center id from list_helpcenters"),
@@ -48,7 +48,7 @@ export function registerHelpCenterTools({ server, apiRequest, apiBase }: ToolCon
     "get_article",
     {
       title: "Get Knowledge Base article",
-      description: "Get a single Knowledge Base article by ID",
+      description: "Get a single Knowledge Base article by ID (requires VIEW_ARTICLES scope)",
       annotations: { title: "Get Knowledge Base article", readOnlyHint: true },
       inputSchema: { id: z.number().int().describe("Article ID") },
     },
@@ -59,7 +59,7 @@ export function registerHelpCenterTools({ server, apiRequest, apiBase }: ToolCon
     "create_article",
     {
       title: "Create Knowledge Base article",
-      description: "Create a KB article (draft). Set publish true with collectionId and isPublic to publish in one step",
+      description: "Create a KB article (draft). Set publish true with collectionId and isPublic to publish in one step (requires MANAGE_ARTICLES scope)",
       annotations: { title: "Create Knowledge Base article", readOnlyHint: false, destructiveHint: false },
       inputSchema: {
         helpCenterId: z.number().int().describe("Help center id from list_helpcenters"),
@@ -86,7 +86,7 @@ export function registerHelpCenterTools({ server, apiRequest, apiBase }: ToolCon
     "update_article",
     {
       title: "Update Knowledge Base article",
-      description: "Update a KB article draft; set publish true with isPublic to publish after save",
+      description: "Update a KB article draft; set publish true with isPublic to publish after save (requires MANAGE_ARTICLES scope)",
       annotations: { title: "Update Knowledge Base article", readOnlyHint: false, destructiveHint: true },
       inputSchema: {
         id: z.number().int().describe("Article ID"),
@@ -121,7 +121,7 @@ export function registerHelpCenterTools({ server, apiRequest, apiBase }: ToolCon
     "archive_article",
     {
       title: "Archive Knowledge Base article",
-      description: "Archive a Knowledge Base article (hidden from the help center, not deleted)",
+      description: "Archive a Knowledge Base article (hidden from the help center, not deleted; requires MANAGE_ARTICLES scope)",
       annotations: { title: "Archive Knowledge Base article", readOnlyHint: false, destructiveHint: true },
       inputSchema: { id: z.number().int().describe("Article ID") },
     },
@@ -132,7 +132,7 @@ export function registerHelpCenterTools({ server, apiRequest, apiBase }: ToolCon
     "list_collections",
     {
       title: "List Knowledge Base collections",
-      description: "List KB collections for a help center (nested tree by default; use isRoot or collectionId for other views)",
+      description: "List KB collections for a help center (nested tree by default; use isRoot or collectionId for other views; requires VIEW_COLLECTIONS scope)",
       annotations: { title: "List Knowledge Base collections", readOnlyHint: true },
       inputSchema: {
         helpCenterId: z.number().int().describe("Help center id from list_helpcenters"),
@@ -157,7 +157,7 @@ export function registerHelpCenterTools({ server, apiRequest, apiBase }: ToolCon
     "get_collection",
     {
       title: "Get Knowledge Base collection",
-      description: "Get a KB collection by ID with direct subcollections and paginated articles",
+      description: "Get a KB collection by ID with direct subcollections and paginated articles (requires VIEW_COLLECTIONS scope)",
       annotations: { title: "Get Knowledge Base collection", readOnlyHint: true },
       inputSchema: {
         id: z.number().int().describe("Collection ID"),
@@ -178,7 +178,7 @@ export function registerHelpCenterTools({ server, apiRequest, apiBase }: ToolCon
     "create_collection",
     {
       title: "Create Knowledge Base collection",
-      description: "Create a KB collection under a help center (optionally nested under parentCollectionId)",
+      description: "Create a KB collection under a help center (optionally nested under parentCollectionId; requires MANAGE_COLLECTIONS scope)",
       annotations: { title: "Create Knowledge Base collection", readOnlyHint: false, destructiveHint: false },
       inputSchema: {
         name: z.string().describe("Collection name"),
