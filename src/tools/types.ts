@@ -27,11 +27,11 @@ export function formatResult(result: ApiResult) {
 }
 
 export const noteSchema = z.object({
-  title: z.string().optional().describe("Note title"),
-  description: z.string().describe("Note body"),
+  title: z.string().optional(),
+  description: z.string(),
   attachments: z.array(z.object({
     url: z.string().url(),
     file_name: z.string().optional(),
     content_type: z.string().optional(),
-  })).max(20).optional().describe("Up to 20 files fetched from these URLs"),
+  })).max(20).optional(),
 });

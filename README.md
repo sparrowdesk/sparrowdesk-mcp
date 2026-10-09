@@ -71,12 +71,6 @@ Knowledge Base tools need the collection and article scopes: `VIEW_COLLECTIONS` 
 | `get_company` | Retrieve a company by ID |
 | `create_company` | Create a company |
 | `update_company` | Update a company |
-| **Notes** | |
-| `list_notes` | List notes on a contact or company |
-| `get_note` | Retrieve a note by ID |
-| `create_note` | Create a note on a contact or company |
-| `update_note` | Update a note |
-| `delete_note` | Delete a note |
 | **Contact fields** | |
 | `list_contact_fields` | List contact field definitions |
 | **Members & tags** | |
@@ -85,7 +79,7 @@ Knowledge Base tools need the collection and article scopes: `VIEW_COLLECTIONS` 
 | **Knowledge Base** | |
 | `list_helpcenters` | List help centers |
 | `list_collections` | List KB collections for a help center |
-| `get_collection` | Get a collection by ID |
+| `get_collection` | Get a collection with subcollections and articles |
 | `create_collection` | Create a KB collection |
 | `list_articles` | List articles for a help center |
 | `get_article` | Get one article |
@@ -275,16 +269,6 @@ Update an existing company. Give at least one field besides `id`.
 
 - `id` (integer, required) — The company ID to update
 - `name`, `domains`, `domain`, `phone`, `address`, `notes` — Optional updates
-
-### Notes
-
-Notes on contacts and companies. Every tool takes `parent_type`: `contact` or `company`.
-
-- `list_notes` — `parent_type`, `parent_id`; optional `starting_after`, `per_page`
-- `get_note` — `parent_type`, `id`
-- `create_note` — `parent_type`, `parent_id`, `description`; optional `title`, `attachments` (up to 20 `{ url, file_name?, content_type? }`). Needs a member-bound API key
-- `update_note` — `parent_type`, `id`; optional `title`, `description`, `attachments` (replaces the whole set; include existing SparrowDesk URLs to keep them)
-- `delete_note` — `parent_type`, `id`
 
 ### Knowledge Base
 
