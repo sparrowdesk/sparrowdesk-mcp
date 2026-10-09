@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { formatResult, type ToolContext } from "./types.js";
+import { formatResult, noteSchema, type ToolContext } from "./types.js";
 
 export function registerCompanyTools({ server, apiRequest, apiBase }: ToolContext) {
   server.registerTool(
@@ -45,16 +45,20 @@ export function registerCompanyTools({ server, apiRequest, apiBase }: ToolContex
       annotations: { title: "Create company", readOnlyHint: false, destructiveHint: false },
       inputSchema: {
         name: z.string().describe("Company name"),
-        domain: z.string().optional().describe("Lowercase domain like example.com or company.co.uk"),
+        domains: z.array(z.string()).optional().describe("Domains owned by the company; the first is primary. A domain may belong to only one company"),
+        domain: z.string().optional().describe("Single-domain shorthand (lowercase, e.g. example.com); ignored when domains is set"),
         address: z.string().optional().describe("Company address"),
         notes: z.string().optional().describe("Free-form notes about the company"),
+        company_note: z.array(noteSchema).optional().describe("Notes to create under the company (requires a member-bound API key; failed notes are skipped)"),
       },
     },
-    async ({ name, domain, address, notes }) => {
+    async ({ name, domains, domain, address, notes, company_note }) => {
       const body: Record<string, unknown> = { name };
+      if (domains !== undefined) body.domains = domains;
       if (domain !== undefined) body.domain = domain;
       if (address !== undefined) body.address = address;
       if (notes !== undefined) body.notes = notes;
+      if (company_note !== undefined) body.company_note = company_note;
       return formatResult(await apiRequest(`${apiBase}/companies`, { method: "POST", body }));
     }
   );
@@ -68,15 +72,17 @@ export function registerCompanyTools({ server, apiRequest, apiBase }: ToolContex
       inputSchema: {
         id: z.number().int().describe("The company ID to update"),
         name: z.string().optional().describe("Company name"),
-        domain: z.string().optional().describe("Lowercase domain like example.com or company.co.uk"),
+        domains: z.array(z.string()).optional().describe("Domains owned by the company; the first is primary. A domain may belong to only one company"),
+        domain: z.string().optional().describe("Single-domain shorthand (lowercase, e.g. example.com); ignored when domains is set"),
         phone: z.string().optional().describe("Company phone number"),
         address: z.string().optional().describe("Company address"),
         notes: z.string().optional().describe("Free-form notes about the company"),
       },
     },
-    async ({ id, name, domain, phone, address, notes }) => {
+    async ({ id, name, domains, domain, phone, address, notes }) => {
       const body: Record<string, unknown> = {};
       if (name !== undefined) body.name = name;
+      if (domains !== undefined) body.domains = domains;
       if (domain !== undefined) body.domain = domain;
       if (phone !== undefined) body.phone = phone;
       if (address !== undefined) body.address = address;

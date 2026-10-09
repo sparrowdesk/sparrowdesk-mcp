@@ -1,6 +1,12 @@
 import { z } from "zod";
 import { formatResult, type ToolContext } from "./types.js";
 
+const customFieldsSchema = z.array(z.object({
+  internal_name: z.string().describe("Custom field internal name"),
+  value: z.union([z.string(), z.array(z.union([z.string(), z.number()]))])
+    .describe("Field value; for multi_select, an array of option ids or names"),
+}));
+
 export function registerConversationTools({ server, apiRequest, apiBase }: ToolContext) {
   server.registerTool(
     "get_conversation",
@@ -29,11 +35,13 @@ export function registerConversationTools({ server, apiRequest, apiBase }: ToolC
         brand_id: z.array(z.number().int()).optional().describe("Filter by brand IDs"),
         requested_by_id: z.number().int().optional().describe("Filter by requestor contact ID"),
         requested_by_company: z.number().int().optional().describe("Filter by requester contact company ID (intersects with requested_by_id when both are set)"),
+        handled_by_ai_agent: z.boolean().optional().describe("true: only conversations assigned to an AI agent; false: handed off to humans or not AI-assigned (omit for no filter)"),
+        search: z.string().max(250).optional().describe("Search subject, description, replies, or conversation ID; quote exact phrases"),
         sort_by: z.enum(["created_at", "updated_at"]).optional().describe("Field to sort by (default: created_at)"),
         sort_order: z.enum(["asc", "desc"]).optional().describe("Sort order (default: desc)"),
       },
     },
-    async ({ starting_after, per_page, status, priority, assigned_to_member_id, assigned_to_team_id, brand_id, requested_by_id, requested_by_company, sort_by, sort_order }) => {
+    async ({ starting_after, per_page, status, priority, assigned_to_member_id, assigned_to_team_id, brand_id, requested_by_id, requested_by_company, handled_by_ai_agent, search, sort_by, sort_order }) => {
       const params = new URLSearchParams();
       if (starting_after) params.set("starting_after", starting_after);
       if (per_page) params.set("per_page", String(per_page));
@@ -44,6 +52,8 @@ export function registerConversationTools({ server, apiRequest, apiBase }: ToolC
       if (brand_id) brand_id.forEach((id) => params.append("brand_id[]", String(id)));
       if (requested_by_id) params.set("requested_by_id", String(requested_by_id));
       if (requested_by_company !== undefined) params.set("requested_by_company", String(requested_by_company));
+      if (handled_by_ai_agent !== undefined) params.set("handled_by_ai_agent", String(handled_by_ai_agent));
+      if (search) params.set("search", search);
       if (sort_by) params.set("sort_by", sort_by);
       if (sort_order) params.set("sort_order", sort_order);
 
@@ -71,11 +81,12 @@ export function registerConversationTools({ server, apiRequest, apiBase }: ToolC
         brand_id: z.array(z.number().int()).optional().describe("Filter by brand IDs"),
         requested_by_id: z.number().int().optional().describe("Filter by requestor contact ID"),
         handled_by_ai_agent: z.boolean().optional().describe("Filter by whether the conversation was handled by the AI agent (omit for no filter)"),
+        search: z.string().max(250).optional().describe("Search subject, description, replies, or conversation ID; quote exact phrases"),
         sort_by: z.enum(["created_at", "updated_at"]).optional().describe("Field to sort the conversation list by (default: created_at)"),
         sort_order: z.enum(["asc", "desc"]).optional().describe("Sort order for the conversation list (default: desc)"),
       },
     },
-    async ({ starting_after, per_page, replies_per_page, replies_sort_order, type, status, priority, assigned_to_member_id, assigned_to_team_id, brand_id, requested_by_id, handled_by_ai_agent, sort_by, sort_order }) => {
+    async ({ starting_after, per_page, replies_per_page, replies_sort_order, type, status, priority, assigned_to_member_id, assigned_to_team_id, brand_id, requested_by_id, handled_by_ai_agent, search, sort_by, sort_order }) => {
       const params = new URLSearchParams();
       if (starting_after) params.set("starting_after", starting_after);
       if (per_page) params.set("per_page", String(per_page));
@@ -89,6 +100,7 @@ export function registerConversationTools({ server, apiRequest, apiBase }: ToolC
       if (brand_id) brand_id.forEach((id) => params.append("brand_id[]", String(id)));
       if (requested_by_id) params.set("requested_by_id", String(requested_by_id));
       if (handled_by_ai_agent !== undefined) params.set("handled_by_ai_agent", String(handled_by_ai_agent));
+      if (search) params.set("search", search);
       if (sort_by) params.set("sort_by", sort_by);
       if (sort_order) params.set("sort_order", sort_order);
 
@@ -106,7 +118,7 @@ export function registerConversationTools({ server, apiRequest, apiBase }: ToolC
       inputSchema: {
         id: z.number().int().describe("The conversation ID"),
         starting_after: z.string().optional().describe("Pagination cursor"),
-        per_page: z.number().int().min(1).max(100).optional().describe("Items per page (1-100, default 25)"),
+        per_page: z.number().int().min(1).max(50).optional().describe("Replies per page (1-50, default 50)"),
         type: z.enum(["INTERNAL_NOTE", "REPLY"]).optional().describe("Filter by reply type"),
         sort_order: z.enum(["asc", "desc"]).optional().describe("Sort order (default: desc)"),
       },
@@ -149,32 +161,49 @@ export function registerConversationTools({ server, apiRequest, apiBase }: ToolC
       annotations: { title: "Create conversation", readOnlyHint: false, destructiveHint: false },
       inputSchema: {
         subject: z.string().describe("Conversation subject"),
-        description: z.string().describe("Conversation description"),
+        description: z.string().describe("Opening message body (HTML)"),
         requested_by: z.union([
           z.string().email(),
           z.string().regex(/^\+?[\d\s\-().]{7,20}$/),
         ]).describe("Email or phone number of the requester"),
+        requested_by_firstname: z.string().optional().describe("Requester first name, applied only if the contact is newly created"),
+        requested_by_lastname: z.string().optional().describe("Requester last name, applied only if the contact is newly created"),
         priority: z.enum(["Low", "Medium", "High", "Urgent"]).optional().describe("Priority level (default: Medium)"),
-        source: z.enum(["Mail", "Call"]).optional().describe("Source channel (default: Call)"),
+        source: z.enum(["Mail", "Call", "API"]).optional().describe("Source channel (default: Call)"),
         status: z.enum(["Open", "Pending", "Resolved", "Closed"]).optional().describe("Initial status (default: Open)"),
         brand_id: z.number().int().optional().describe("Brand ID (uses account default if omitted)"),
         assignee: z.string().email().optional().describe("Agent email address to assign the conversation to"),
         team_id: z.number().int().optional().describe("Team ID to assign the conversation to"),
-        custom_fields: z.array(z.object({
-          internal_name: z.string().describe("Custom field internal name"),
-          value: z.union([z.string(), z.number(), z.boolean(), z.null()]).describe("Custom field value"),
-        })).optional().describe("Custom field values"),
+        created_at: z.number().int().optional().describe("Creation time in epoch seconds (default now)"),
+        resolved_at: z.number().int().optional().describe("Resolution time in epoch seconds; only with status Resolved/Closed and >= created_at"),
+        skip_notifications: z.boolean().optional().describe("Suppress notifications for this creation (default false)"),
+        custom_fields: customFieldsSchema.optional().describe("Custom field values"),
+        tags: z.array(z.string()).optional().describe("Tag labels to attach; missing tags are created"),
+        attachments: z.array(z.object({
+          url: z.string().url().describe("Public URL the file is fetched from and re-hosted"),
+          file_name: z.string().optional(),
+          content_type: z.string().optional(),
+          size: z.number().int().optional().describe("Size in bytes"),
+          headers: z.record(z.string(), z.string()).optional().describe("Headers sent when fetching the URL (e.g. auth)"),
+        })).optional().describe("Files attached to the opening message; unfetchable files are skipped"),
       },
     },
-    async ({ subject, description, requested_by, priority, source, status, brand_id, assignee, team_id, custom_fields }) => {
+    async ({ subject, description, requested_by, requested_by_firstname, requested_by_lastname, priority, source, status, brand_id, assignee, team_id, created_at, resolved_at, skip_notifications, custom_fields, tags, attachments }) => {
       const body: Record<string, unknown> = { subject, description, requested_by };
+      if (requested_by_firstname !== undefined) body.requested_by_firstname = requested_by_firstname;
+      if (requested_by_lastname !== undefined) body.requested_by_lastname = requested_by_lastname;
       if (priority !== undefined) body.priority = priority;
       if (source !== undefined) body.source = source;
       if (status !== undefined) body.status = status;
       if (brand_id !== undefined) body.brand_id = brand_id;
       if (assignee !== undefined) body.assignee = assignee;
       if (team_id !== undefined) body.team_id = team_id;
+      if (created_at !== undefined) body.created_at = created_at;
+      if (resolved_at !== undefined) body.resolved_at = resolved_at;
+      if (skip_notifications !== undefined) body.skip_notifications = skip_notifications;
       if (custom_fields !== undefined) body.custom_fields = custom_fields;
+      if (tags !== undefined) body.tags = tags;
+      if (attachments !== undefined) body.attachments = attachments;
 
       return formatResult(await apiRequest(`${apiBase}/conversations`, { method: "POST", body }));
     }
@@ -193,10 +222,7 @@ export function registerConversationTools({ server, apiRequest, apiBase }: ToolC
         status: z.string().optional().describe("Status (e.g. Open, Pending, Resolved, Closed)"),
         assignee: z.string().email().optional().describe("Assignee agent email"),
         team: z.string().optional().describe("Team name or identifier per API"),
-        custom_fields: z.array(z.object({
-          internal_name: z.string(),
-          value: z.string(),
-        })).optional().describe("Custom field updates"),
+        custom_fields: customFieldsSchema.optional().describe("Custom field updates"),
       },
     },
     async ({ id, subject, priority, status, assignee, team, custom_fields }) => {
@@ -268,19 +294,26 @@ export function registerConversationTools({ server, apiRequest, apiBase }: ToolC
       annotations: { title: "Create conversation field", readOnlyHint: false, destructiveHint: false },
       inputSchema: {
         name: z.string().describe("Display name"),
-        type: z.enum(["single_line_text", "multi_line_text", "dropdown", "number", "date", "email"]).describe("Field type"),
+        type: z.enum(["single_line_text", "multi_line_text", "dropdown", "number", "date", "email", "nested", "multi_select"]).describe("Field type"),
         internal_name: z.string().optional().describe("Stable internal key (generated if omitted)"),
         description: z.string().optional().describe("Help text"),
         is_mandatory_on_close: z.boolean().optional().describe("Require before closing conversations"),
-        field_options: z.array(z.string()).optional().describe("Allowed values for dropdown fields"),
+        field_options: z.array(z.string()).optional().describe("Options for dropdown and multi_select fields (required for those; not allowed for nested)"),
+        levels: z.array(z.string()).max(3).optional().describe("Nested fields only: level names, top-down (max 3)"),
+        choices: z.array(z.object({
+          name: z.string(),
+          children: z.array(z.record(z.string(), z.unknown())).optional().describe("Child choices, same shape, recursive"),
+        })).optional().describe("Nested fields only: option tree; depth must not exceed number of levels"),
       },
     },
-    async ({ name, type, internal_name, description, is_mandatory_on_close, field_options }) => {
+    async ({ name, type, internal_name, description, is_mandatory_on_close, field_options, levels, choices }) => {
       const body: Record<string, unknown> = { name, type };
       if (internal_name !== undefined) body.internal_name = internal_name;
       if (description !== undefined) body.description = description;
       if (is_mandatory_on_close !== undefined) body.is_mandatory_on_close = is_mandatory_on_close;
       if (field_options !== undefined) body.field_options = field_options;
+      if (levels !== undefined) body.levels = levels;
+      if (choices !== undefined) body.choices = choices;
       return formatResult(await apiRequest(`${apiBase}/conversations/fields`, { method: "POST", body }));
     }
   );
@@ -297,7 +330,7 @@ export function registerConversationTools({ server, apiRequest, apiBase }: ToolC
         description: z.string().optional(),
         is_active: z.boolean().optional(),
         is_mandatory_on_close: z.boolean().optional(),
-        field_options: z.array(z.string()).optional().describe("Replace dropdown options (dropdown fields only)"),
+        field_options: z.array(z.string()).optional().describe("New options to append (dropdown and multi_select only); an option that already exists returns 409"),
       },
     },
     async ({ id, name, description, is_active, is_mandatory_on_close, field_options }) => {
