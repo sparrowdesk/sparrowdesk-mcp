@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 export type ApiRequestOptions = {
@@ -24,3 +25,13 @@ export function formatResult(result: ApiResult) {
 
   return { content: [{ type: "text" as const, text: JSON.stringify(result.data, null, 2) }] };
 }
+
+export const noteSchema = z.object({
+  title: z.string().optional(),
+  description: z.string(),
+  attachments: z.array(z.object({
+    url: z.string().url(),
+    file_name: z.string().optional(),
+    content_type: z.string().optional(),
+  })).max(20).optional(),
+});

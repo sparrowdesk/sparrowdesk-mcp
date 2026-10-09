@@ -108,6 +108,8 @@ List conversations with optional filters, sorting, and pagination.
 - `brand_id` (array of integers, optional) — Filter by brand IDs
 - `requested_by_id` (integer, optional) — Filter by requestor contact ID
 - `requested_by_company` (integer, optional) — Filter by requester contact company ID (intersects with `requested_by_id` when both are set)
+- `handled_by_ai_agent` (boolean, optional) — `true`: only AI-assigned conversations; `false`: handed off to humans or not AI-assigned
+- `search` (string, optional) — Search subject, description, replies, or conversation ID (max 250 chars; quote exact phrases)
 - `sort_by` (string, optional) — `created_at` or `updated_at` (default: `created_at`)
 - `sort_order` (string, optional) — `asc` or `desc` (default: `desc`)
 
@@ -122,6 +124,7 @@ List conversations with their replies inlined in a single call. It takes the sam
 - `type` (string, optional) — Filter replies by `INTERNAL_NOTE` or `REPLY`
 - `status`, `priority`, `assigned_to_member_id`, `assigned_to_team_id`, `brand_id`, `requested_by_id` — Same conversation filters as `list_conversations`
 - `handled_by_ai_agent` (boolean, optional) — Filter by whether the conversation was handled by the AI agent
+- `search` (string, optional) — Search subject, description, replies, or conversation ID (max 250 chars; quote exact phrases)
 - `sort_by` (string, optional) — `created_at` or `updated_at` (default: `created_at`)
 - `sort_order` (string, optional) — `asc` or `desc` (default: `desc`)
 
@@ -131,7 +134,7 @@ List replies for a conversation, with optional filtering and pagination.
 
 - `id` (integer, required) — The conversation ID
 - `starting_after` (string, optional) — Pagination cursor
-- `per_page` (integer, optional) — Items per page, 1–100 (default: 25)
+- `per_page` (integer, optional) — Replies per page, 1–50 (default: 50)
 - `type` (string, optional) — Filter by `INTERNAL_NOTE` or `REPLY`
 - `sort_order` (string, optional) — `asc` or `desc` (default: `desc`)
 
@@ -148,15 +151,21 @@ Add a reply or internal note to a conversation.
 Create a new conversation/ticket in SparrowDesk.
 
 - `subject` (string, required) — Conversation subject
-- `description` (string, required) — Conversation description
+- `description` (string, required) — Opening message body (HTML)
 - `requested_by` (string, required) — Email or phone number of the requester
+- `requested_by_firstname`, `requested_by_lastname` (string, optional) — Applied only if the requester contact is newly created
 - `priority` (string, optional) — `Low`, `Medium`, `High`, or `Urgent` (default: `Medium`)
-- `source` (string, optional) — `Mail` or `Call` (default: `Call`)
+- `source` (string, optional) — `Mail`, `Call`, or `API` (default: `Call`)
 - `status` (string, optional) — `Open`, `Pending`, `Resolved`, or `Closed` (default: `Open`)
 - `brand_id` (integer, optional) — Brand ID (uses the account default if omitted)
 - `assignee` (string, optional) — Agent email address to assign the conversation to
 - `team_id` (integer, optional) — Team ID to assign the conversation to
-- `custom_fields` (array, optional) — Array of `{ internal_name, value }` objects
+- `created_at` (integer, optional) — Creation time in epoch seconds (default: now)
+- `resolved_at` (integer, optional) — Resolution time in epoch seconds; only with status `Resolved`/`Closed`, and `>= created_at`
+- `skip_notifications` (boolean, optional) — Suppress notifications for this creation (default: `false`)
+- `custom_fields` (array, optional) — Array of `{ internal_name, value }` objects; `value` is a string, or an array of option ids/names for `multi_select`
+- `tags` (array of strings, optional) — Tag labels to attach; missing tags are created
+- `attachments` (array, optional) — `{ url, file_name?, content_type?, size?, headers? }` objects; files are fetched and attached to the opening message, unfetchable ones are skipped
 
 #### `update_conversation`
 
@@ -164,7 +173,7 @@ Patch an existing conversation.
 
 - `id` (integer, required) — Conversation ID
 - `subject`, `priority`, `status`, `assignee` (email), `team` (string) — Optional updates
-- `custom_fields` (array, optional) — `{ internal_name, value }` (values as strings)
+- `custom_fields` (array, optional) — `{ internal_name, value }`, same shape as `create_conversation`
 
 #### `delete_conversation`
 
@@ -174,8 +183,8 @@ Delete a conversation. Parameters: `id` (integer, required).
 
 - `list_conversation_fields` — `starting_after`, `per_page`, `is_active`, `is_default`
 - `get_conversation_field` — `id`
-- `create_conversation_field` — `name`, `type` (`single_line_text` | `multi_line_text` | `dropdown` | `number` | `date` | `email`), optional `internal_name`, `description`, `is_mandatory_on_close`, `field_options` (required for dropdowns)
-- `update_conversation_field` — `id` plus any of `name`, `description`, `is_active`, `is_mandatory_on_close`, `field_options`
+- `create_conversation_field` — `name`, `type` (`single_line_text` | `multi_line_text` | `dropdown` | `number` | `date` | `email` | `nested` | `multi_select`), optional `internal_name`, `description`, `is_mandatory_on_close`, `field_options` (required for `dropdown` and `multi_select`), `levels` and `choices` (nested fields only)
+- `update_conversation_field` — `id` plus any of `name`, `description`, `is_active`, `is_mandatory_on_close`, `field_options` (appended; an existing option returns 409)
 
 ### Contacts
 
@@ -197,8 +206,9 @@ Create a new contact. Give either `email` or `phone`.
 - `last_name` (string, optional) — Contact's last name
 - `email` (string, optional) — Contact's email address (required if `phone` is omitted)
 - `phone` (string, optional) — Contact's phone number (required if `email` is omitted)
-- `company_id` (integer, optional) — ID of the company to associate with
+- `company_ids` (array of integers, optional) — IDs of the companies to associate with
 - `custom_fields` (object, optional) — Custom field key-value pairs
+- `contact_note` (array, optional) — Notes `{ title?, description, attachments? }` to create under the contact; needs a member-bound API key
 
 #### `update_contact`
 
@@ -209,7 +219,7 @@ Update an existing contact.
 - `last_name` (string, optional) — Contact's last name
 - `email` (string, optional) — Contact's email address
 - `phone` (string, optional) — Contact's phone number
-- `company_id` (integer, optional) — ID of the company to associate with
+- `company_ids` (array of integers, optional) — IDs of the companies to associate with
 - `blocked` (boolean, optional) — Whether the contact is blocked
 - `custom_fields` (object, optional) — Custom field key-value pairs
 
@@ -219,7 +229,7 @@ Delete a contact. Parameters: `id` (integer, required).
 
 #### `bulk_create_contacts` and `get_bulk_job_status`
 
-`bulk_create_contacts` accepts `contacts`: an array of objects with optional `first_name`, `last_name`, `email`, `phone`, `company_id`, and `custom_fields`. The response includes a `job_id`. Poll `get_bulk_job_status` with that `job_id` until the job reports `completed` or `failed`.
+`bulk_create_contacts` accepts `contacts`: an array of objects with optional `first_name`, `last_name`, `email`, `phone`, `company_ids`, and `custom_fields`. The response includes a `job_id`. Poll `get_bulk_job_status` with that `job_id` until the job reports `completed` or `failed`.
 
 ### Contact fields
 
@@ -227,9 +237,10 @@ Delete a contact. Parameters: `id` (integer, required).
 
 Retrieve all contact fields defined in the account.
 
-- `search` (string, optional) — Search contact fields by name
-- `page` (integer, optional) — Page number for pagination
-- `limit` (integer, optional) — Results per page
+- `starting_after` (string, optional) — Pagination cursor
+- `per_page` (integer, optional) — Items per page, 1–100 (default: 25)
+- `is_active` (boolean, optional) — Filter by active status
+- `is_default` (boolean, optional) — Filter default fields only
 
 ### Companies
 
@@ -246,31 +257,33 @@ Fetch a single company by its numeric ID. Parameters: `id` (integer, required).
 Create a new company.
 
 - `name` (string, required) — Company name
-- `domain` (string, optional) — Lowercase domain like `example.com`
+- `domains` (array of strings, optional) — Domains owned by the company; the first is primary
+- `domain` (string, optional) — Single-domain shorthand like `example.com`; ignored when `domains` is set
 - `address` (string, optional) — Company address
 - `notes` (string, optional) — Free-form notes
+- `company_note` (array, optional) — Notes `{ title?, description, attachments? }` to create under the company; needs a member-bound API key
 
 #### `update_company`
 
 Update an existing company. Give at least one field besides `id`.
 
 - `id` (integer, required) — The company ID to update
-- `name`, `domain`, `phone`, `address`, `notes` — Optional updates
+- `name`, `domains`, `domain`, `phone`, `address`, `notes` — Optional updates
 
 ### Knowledge Base
 
-Call `list_helpcenters` first to get a `helpCenterId`. Collections and articles are scoped per help center and brand.
+Call `list_helpcenters` first to get a `help_center_id`. Collections and articles are scoped per help center and brand.
 
 Reads need `VIEW_COLLECTIONS` / `VIEW_ARTICLES`; writes need `MANAGE_COLLECTIONS` / `MANAGE_ARTICLES`.
 
-- `list_helpcenters` — no parameters
-- `list_collections` — `helpCenterId` (required); optional `page`, `limit`, `collectionId`, `isRoot` — needs `VIEW_COLLECTIONS`
-- `get_collection` — `id`; optional `page`, `limit` for articles — needs `VIEW_COLLECTIONS`
-- `create_collection` — `name`, `helpCenterId`, `brandId`; optional `description`, `parentCollectionId` — needs `MANAGE_COLLECTIONS`
-- `list_articles` — `helpCenterId` (required); optional `published`, `draft`, `archived`, `page`, `limit`, `search`, `collectionId` — needs `VIEW_ARTICLES`
+- `list_helpcenters` — optional `starting_after`, `per_page`
+- `list_collections` — `help_center_id` (required); optional `starting_after`, `per_page`, `collection_id`, `is_root` — needs `VIEW_COLLECTIONS`
+- `get_collection` — `id` — needs `VIEW_COLLECTIONS`
+- `create_collection` — `name`, `help_center_id`, `brand_id`; optional `description`, `parent_collection_id` — needs `MANAGE_COLLECTIONS`
+- `list_articles` — `help_center_id` (required); optional `published`, `draft`, `archived`, `starting_after`, `per_page`, `search`, `collection_id` — needs `VIEW_ARTICLES`
 - `get_article` — `id` — needs `VIEW_ARTICLES`
-- `create_article` — `helpCenterId`, `brandId`; optional `title`, `content` (HTML), `publish`, `collectionId`, `isPublic` (publish flow per the API docs) — needs `MANAGE_ARTICLES`
-- `update_article` — `id`; optional `title`, `content`, `collectionId` (null to remove from collection), `brandId`, `publish`, `isPublic`, `aiAgentEnabled`, `aiCopilotEnabled` — needs `MANAGE_ARTICLES`
+- `create_article` — `help_center_id`, `brand_id`; optional `title`, `content` (HTML), `publish`, `collection_id`, `is_public` (publish flow per the API docs) — needs `MANAGE_ARTICLES`
+- `update_article` — `id`; optional `title`, `content`, `collection_id` (null to remove from collection), `brand_id`, `publish`, `is_public`, `ai_agent_enabled`, `ai_copilot_enabled` — needs `MANAGE_ARTICLES`
 - `archive_article` — `id` — needs `MANAGE_ARTICLES`
 
 ### Account

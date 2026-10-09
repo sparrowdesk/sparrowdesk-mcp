@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { formatResult, type ToolContext } from "./types.js";
+import { formatResult, noteSchema, type ToolContext } from "./types.js";
 
 const customFieldValueSchema = z.union([z.string(), z.number(), z.boolean(), z.null()]);
 
@@ -15,11 +15,12 @@ export function registerContactTools({ server, apiRequest, apiBase }: ToolContex
         last_name: z.string().optional().describe("Contact's last name"),
         email: z.string().email().optional().describe("Contact's email address (required if phone not provided)"),
         phone: z.string().optional().describe("Contact's phone number (required if email not provided)"),
-        company_id: z.number().int().optional().describe("ID of the company to associate the contact with"),
+        company_ids: z.array(z.number().int()).optional().describe("IDs of the companies to associate the contact with"),
         custom_fields: z.record(z.string(), customFieldValueSchema).optional().describe("Custom field key-value pairs"),
+        contact_note: z.array(noteSchema).optional().describe("Notes to create under the contact (requires a member-bound API key; failed notes are skipped)"),
       },
     },
-    async ({ first_name, last_name, email, phone, company_id, custom_fields }) => {
+    async ({ first_name, last_name, email, phone, company_ids, custom_fields, contact_note }) => {
       if (!email && !phone) {
         return { content: [{ type: "text" as const, text: "Error: Either email or phone must be provided" }], isError: true };
       }
@@ -27,8 +28,9 @@ export function registerContactTools({ server, apiRequest, apiBase }: ToolContex
       if (last_name !== undefined) body.last_name = last_name;
       if (email !== undefined) body.email = email;
       if (phone !== undefined) body.phone = phone;
-      if (company_id !== undefined) body.company_id = company_id;
+      if (company_ids !== undefined) body.company_ids = company_ids;
       if (custom_fields !== undefined) body.custom_fields = custom_fields;
+      if (contact_note !== undefined) body.contact_note = contact_note;
 
       return formatResult(await apiRequest(`${apiBase}/contacts`, { method: "POST", body }));
     }
@@ -46,18 +48,18 @@ export function registerContactTools({ server, apiRequest, apiBase }: ToolContex
         last_name: z.string().optional().describe("Contact's last name"),
         email: z.string().email().optional().describe("Contact's email address"),
         phone: z.string().optional().describe("Contact's phone number"),
-        company_id: z.number().int().optional().describe("ID of the company to associate the contact with"),
+        company_ids: z.array(z.number().int()).optional().describe("IDs of the companies to associate the contact with"),
         blocked: z.boolean().optional().describe("Whether the contact is blocked"),
         custom_fields: z.record(z.string(), customFieldValueSchema).optional().describe("Custom field key-value pairs"),
       },
     },
-    async ({ id, first_name, last_name, email, phone, company_id, blocked, custom_fields }) => {
+    async ({ id, first_name, last_name, email, phone, company_ids, blocked, custom_fields }) => {
       const body: Record<string, unknown> = {};
       if (first_name !== undefined) body.first_name = first_name;
       if (last_name !== undefined) body.last_name = last_name;
       if (email !== undefined) body.email = email;
       if (phone !== undefined) body.phone = phone;
-      if (company_id !== undefined) body.company_id = company_id;
+      if (company_ids !== undefined) body.company_ids = company_ids;
       if (blocked !== undefined) body.blocked = blocked;
       if (custom_fields !== undefined) body.custom_fields = custom_fields;
 
@@ -87,18 +89,20 @@ export function registerContactTools({ server, apiRequest, apiBase }: ToolContex
       description: "Retrieve all contact fields from SparrowDesk",
       annotations: { title: "List contact fields", readOnlyHint: true },
       inputSchema: {
-        search: z.string().optional().describe("Search contact fields by name"),
-        page: z.number().int().min(1).optional().describe("Page number for pagination"),
-        limit: z.number().int().min(1).max(100).optional().describe("Results per page (1-100)"),
+        starting_after: z.string().optional().describe("Pagination cursor"),
+        per_page: z.number().int().min(1).max(100).optional().describe("Items per page (1-100, default 25)"),
+        is_active: z.boolean().optional().describe("Filter by active status"),
+        is_default: z.boolean().optional().describe("Filter default fields only"),
       },
     },
-    async ({ search, page, limit }) => {
+    async ({ starting_after, per_page, is_active, is_default }) => {
       const params = new URLSearchParams();
-      if (search) params.set("search", search);
-      if (page) params.set("page", String(page));
-      if (limit) params.set("limit", String(limit));
+      if (starting_after) params.set("starting_after", starting_after);
+      if (per_page !== undefined) params.set("per_page", String(per_page));
+      if (is_active !== undefined) params.set("is_active", String(is_active));
+      if (is_default !== undefined) params.set("is_default", String(is_default));
       const query = params.toString() ? `?${params.toString()}` : "";
-      return formatResult(await apiRequest(`${apiBase}/contact-fields${query}`));
+      return formatResult(await apiRequest(`${apiBase}/contacts/fields${query}`));
     }
   );
 
@@ -144,7 +148,7 @@ export function registerContactTools({ server, apiRequest, apiBase }: ToolContex
     last_name: z.string().optional(),
     email: z.string().email().optional(),
     phone: z.string().optional(),
-    company_id: z.number().int().optional(),
+    company_ids: z.array(z.number().int()).optional(),
     custom_fields: z.record(z.string(), customFieldValueSchema).optional(),
   });
 
