@@ -5,7 +5,7 @@ import { rateLimit } from "express-rate-limit";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { registerAllTools } from "./tools/index.js";
-import { createDynamoClient, createOAuthStore, oauthTableName, type TokenSession } from "./store.js";
+import { configureDynamo, createOAuthStore, oauthModel, type TokenSession } from "./store.js";
 
 // ---------------------------------------------------------------------------
 // Startup validation — fail fast if required config is missing
@@ -72,11 +72,9 @@ const KNOWN_OAUTH_ERRORS = new Set([
 // ---------------------------------------------------------------------------
 // OAuth state — shared across replicas in DynamoDB
 // ---------------------------------------------------------------------------
-const store = createOAuthStore({
-  client: createDynamoClient(process.env.DYNAMO_REGION!, process.env.DYNAMO_ENDPOINT),
-  tableName: oauthTableName(process.env.DYNAMO_PREFIX!),
-  encryptionSecret: SD_CLIENT_SECRET,
-});
+configureDynamo(process.env.DYNAMO_REGION!, process.env.DYNAMO_ENDPOINT);
+const oauthTable = oauthModel(process.env.DYNAMO_PREFIX!);
+const store = createOAuthStore({ model: oauthTable, encryptionSecret: SD_CLIENT_SECRET });
 
 const CLIENT_TTL_SECONDS = 24 * 60 * 60;
 const PENDING_TTL_SECONDS = 10 * 60;
@@ -608,12 +606,13 @@ app.post(["/oauth/token", "/mcp/oauth/token"], authLimiter, async (req, res) => 
 
   console.log(`[token] code=${code?.slice(0, 8)} redirect_uri=${redirect_uri} pkce_verifier=${code_verifier ? "present" : "absent"}`);
 
-  const pending = code ? (await store.get("code", code))?.value : null;
-  if (!pending) {
+  const stored = code ? await store.get("code", code) : null;
+  if (!stored) {
     console.warn(`[token] code=${code?.slice(0, 8)} not found in store — likely expired or already used`);
     res.status(400).json({ error: "invalid_grant", error_description: "Invalid or expired code" });
     return;
   }
+  const pending = stored.value;
 
   if (pending.codeChallenge && pending.codeChallengeMethod === "S256") {
     if (!code_verifier) {
@@ -635,7 +634,7 @@ app.post(["/oauth/token", "/mcp/oauth/token"], authLimiter, async (req, res) => 
     return;
   }
 
-  if (!(await store.take("code", code))) {
+  if (!(await store.remove("code", code, stored.version))) {
     console.warn(`[token] code=${code?.slice(0, 8)} already redeemed by a concurrent request`);
     res.status(400).json({ error: "invalid_grant", error_description: "Invalid or expired code" });
     return;
@@ -710,7 +709,7 @@ app.all("/mcp", mcpLimiter, async (req, res) => {
 try {
   const { ttlEnabled } = await store.ready();
   if (!ttlEnabled) {
-    console.warn(`[startup] TTL is not enabled on expiresAt for ${oauthTableName(process.env.DYNAMO_PREFIX!)}; expired items will never be deleted`);
+    console.warn(`[startup] TTL is not enabled on expiresAt for ${oauthTable.table().name}; expired items will never be deleted`);
   }
 } catch (err) {
   console.error("[startup] DynamoDB OAuth table is not usable:", err);

@@ -1,17 +1,6 @@
 import crypto from "crypto";
-import {
-  ConditionalCheckFailedException,
-  DescribeTableCommand,
-  DescribeTimeToLiveCommand,
-  DynamoDBClient,
-} from "@aws-sdk/client-dynamodb";
-import {
-  DeleteCommand,
-  DynamoDBDocumentClient,
-  GetCommand,
-  PutCommand,
-  UpdateCommand,
-} from "@aws-sdk/lib-dynamodb";
+import dynamoose from "dynamoose";
+import type { Item } from "dynamoose/dist/Item.js";
 
 export interface RegisteredClient {
   redirectUris: string[];
@@ -50,27 +39,42 @@ export interface Stored<T> {
   version: string;
 }
 
+interface OAuthRow extends Item {
+  pk: string;
+  payload: string;
+  expiresAt: number;
+  leaseUntil?: number;
+}
+
 export const TTL_ATTRIBUTE = "expiresAt";
 
-export function oauthTableName(prefix: string) {
-  return `${prefix}oauth`;
+const OAuthSchema = new dynamoose.Schema({
+  pk: { type: String, hashKey: true },
+  payload: String,
+  expiresAt: Number,
+  leaseUntil: Number,
+});
+
+export function configureDynamo(region: string, endpoint?: string) {
+  dynamoose.aws.ddb.set(new dynamoose.aws.ddb.DynamoDB({ region, endpoint }));
 }
 
-export function createDynamoClient(region: string, endpoint?: string) {
-  return new DynamoDBClient({ region, endpoint });
+export function oauthModel(prefix: string) {
+  return dynamoose.model<OAuthRow>("oauth", OAuthSchema, {
+    create: false,
+    prefix,
+    waitForActive: false,
+    throughput: "ON_DEMAND",
+  });
 }
 
-export function createOAuthStore(options: {
-  client: DynamoDBClient;
-  tableName: string;
-  encryptionSecret: string;
-}) {
-  const { client, tableName: TableName } = options;
-  const db = DynamoDBDocumentClient.from(client);
+export function createOAuthStore(options: { model: ReturnType<typeof oauthModel>; encryptionSecret: string }) {
+  const { model } = options;
   const key = Buffer.from(crypto.hkdfSync("sha256", options.encryptionSecret, "", "sparrowdesk-mcp oauth store", 32));
 
   const nowSeconds = () => Math.floor(Date.now() / 1000);
   const keyFor = (kind: Kind, id: string) => `${kind}#${crypto.createHash("sha256").update(id).digest("hex")}`;
+  const payloadIs = (version: string) => new dynamoose.Condition("payload").eq(version);
 
   function seal(pk: string, value: unknown) {
     const iv = crypto.randomBytes(12);
@@ -80,9 +84,9 @@ export function createOAuthStore(options: {
     return Buffer.concat([iv, cipher.getAuthTag(), body]).toString("base64");
   }
 
-  function read<T>(pk: string, row: Record<string, unknown> | undefined): Stored<T> | null {
+  function read<T>(pk: string, row: OAuthRow | undefined): Stored<T> | null {
     // DynamoDB TTL deletes lazily (often days late), so expiry is enforced here.
-    if (!row || typeof row.payload !== "string" || Number(row[TTL_ATTRIBUTE]) <= nowSeconds()) return null;
+    if (!row || typeof row.payload !== "string" || Number(row.expiresAt) <= nowSeconds()) return null;
     const raw = Buffer.from(row.payload, "base64");
     try {
       const decipher = crypto.createDecipheriv("aes-256-gcm", key, raw.subarray(0, 12));
@@ -101,60 +105,59 @@ export function createOAuthStore(options: {
       await write;
       return true;
     } catch (err) {
-      if (err instanceof ConditionalCheckFailedException) return false;
+      if (err instanceof Error && err.name === "ConditionalCheckFailedException") return false;
       throw err;
     }
   }
 
+  async function get<K extends Kind>(kind: K, id: string): Promise<Stored<Records[K]> | null> {
+    const pk = keyFor(kind, id);
+    return read<Records[K]>(pk, await model.get({ pk }, { consistent: true }));
+  }
+
+  function remove<K extends Kind>(kind: K, id: string, version: string) {
+    return conditional(model.delete({ pk: keyFor(kind, id) }, { condition: payloadIs(version) }));
+  }
+
   return {
     async ready() {
-      const { Table } = await client.send(new DescribeTableCommand({ TableName }));
+      const ddb = dynamoose.aws.ddb();
+      const TableName = model.table().name;
+      const { Table } = await ddb.describeTable({ TableName });
       if (Table?.TableStatus !== "ACTIVE") {
         throw new Error(`DynamoDB table ${TableName} is ${Table?.TableStatus ?? "missing"}`);
       }
-      const { TimeToLiveDescription: ttl } = await client.send(new DescribeTimeToLiveCommand({ TableName }));
+      const { TimeToLiveDescription: ttl } = await ddb.describeTimeToLive({ TableName });
       return { ttlEnabled: ttl?.TimeToLiveStatus === "ENABLED" && ttl.AttributeName === TTL_ATTRIBUTE };
     },
 
     async put<K extends Kind>(kind: K, id: string, value: Records[K], ttlSeconds: number) {
       const pk = keyFor(kind, id);
-      await db.send(new PutCommand({
-        TableName,
-        Item: { pk, payload: seal(pk, value), [TTL_ATTRIBUTE]: nowSeconds() + ttlSeconds },
-      }));
+      await model.create({ pk, payload: seal(pk, value), expiresAt: nowSeconds() + ttlSeconds }, { overwrite: true });
     },
 
-    async get<K extends Kind>(kind: K, id: string): Promise<Stored<Records[K]> | null> {
-      const pk = keyFor(kind, id);
-      const { Item } = await db.send(new GetCommand({ TableName, Key: { pk }, ConsistentRead: true }));
-      return read<Records[K]>(pk, Item);
-    },
+    get,
 
+    // The conditional delete lets exactly one concurrent caller consume the record.
     async take<K extends Kind>(kind: K, id: string): Promise<Records[K] | null> {
-      const pk = keyFor(kind, id);
-      const { Attributes } = await db.send(new DeleteCommand({ TableName, Key: { pk }, ReturnValues: "ALL_OLD" }));
-      return read<Records[K]>(pk, Attributes)?.value ?? null;
+      const stored = await get(kind, id);
+      return stored && (await remove(kind, id, stored.version)) ? stored.value : null;
     },
 
     claim<K extends Kind>(kind: K, id: string, version: string, leaseSeconds: number) {
       const now = nowSeconds();
-      return conditional(db.send(new UpdateCommand({
-        TableName,
-        Key: { pk: keyFor(kind, id) },
-        UpdateExpression: "SET leaseUntil = :until",
-        ConditionExpression: "payload = :version AND (attribute_not_exists(leaseUntil) OR leaseUntil < :now)",
-        ExpressionAttributeValues: { ":version": version, ":until": now + leaseSeconds, ":now": now },
-      })));
+      return conditional(model.update(
+        { pk: keyFor(kind, id) },
+        { $SET: { leaseUntil: now + leaseSeconds } },
+        {
+          condition: payloadIs(version)
+            .and()
+            .parenthesis((c) => c.where("leaseUntil").not().exists().or().where("leaseUntil").lt(now)),
+        },
+      ));
     },
 
-    remove<K extends Kind>(kind: K, id: string, version: string) {
-      return conditional(db.send(new DeleteCommand({
-        TableName,
-        Key: { pk: keyFor(kind, id) },
-        ConditionExpression: "payload = :version",
-        ExpressionAttributeValues: { ":version": version },
-      })));
-    },
+    remove,
   };
 }
 

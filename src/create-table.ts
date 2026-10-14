@@ -1,5 +1,5 @@
-import { CreateTableCommand, UpdateTimeToLiveCommand, waitUntilTableExists } from "@aws-sdk/client-dynamodb";
-import { createDynamoClient, oauthTableName, TTL_ATTRIBUTE } from "./store.js";
+import dynamoose from "dynamoose";
+import { configureDynamo, oauthModel, TTL_ATTRIBUTE } from "./store.js";
 
 const { DYNAMO_REGION, DYNAMO_PREFIX, DYNAMO_ENDPOINT } = process.env;
 if (!DYNAMO_REGION || !DYNAMO_PREFIX) {
@@ -7,19 +7,18 @@ if (!DYNAMO_REGION || !DYNAMO_PREFIX) {
   process.exit(1);
 }
 
-const TableName = oauthTableName(DYNAMO_PREFIX);
-const client = createDynamoClient(DYNAMO_REGION, DYNAMO_ENDPOINT);
+configureDynamo(DYNAMO_REGION, DYNAMO_ENDPOINT);
+const table = oauthModel(DYNAMO_PREFIX).table();
+const ddb = dynamoose.aws.ddb();
 
-await client.send(new CreateTableCommand({
-  TableName,
-  BillingMode: "PAY_PER_REQUEST",
-  AttributeDefinitions: [{ AttributeName: "pk", AttributeType: "S" }],
-  KeySchema: [{ AttributeName: "pk", KeyType: "HASH" }],
-}));
-await waitUntilTableExists({ client, maxWaitTime: 60 }, { TableName });
-await client.send(new UpdateTimeToLiveCommand({
-  TableName,
+await table.create();
+for (let attempt = 0; attempt < 60; attempt++) {
+  if ((await ddb.describeTable({ TableName: table.name })).Table?.TableStatus === "ACTIVE") break;
+  await new Promise((resolve) => setTimeout(resolve, 1000));
+}
+await ddb.updateTimeToLive({
+  TableName: table.name,
   TimeToLiveSpecification: { AttributeName: TTL_ATTRIBUTE, Enabled: true },
-}));
+});
 
-console.log(`Created ${TableName} (TTL on ${TTL_ATTRIBUTE})`);
+console.log(`Created ${table.name} (TTL on ${TTL_ATTRIBUTE})`);
