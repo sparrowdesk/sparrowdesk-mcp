@@ -7,9 +7,12 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
-    "dev": "node --env-file=.env --import tsx/esm src/index.ts"
+    "dev": "node --env-file=.env --import tsx/esm src/index.ts",
+    "create-table": "node --env-file-if-exists=.env --import tsx/esm src/create-table.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.1151.0",
+    "@aws-sdk/lib-dynamodb": "^3.1151.0",
     "@modelcontextprotocol/sdk": "^1.0.0",
     "express": "^5.2.1",
     "express-rate-limit": "^8.3.2",

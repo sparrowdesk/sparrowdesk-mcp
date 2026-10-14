@@ -5,6 +5,7 @@ import { rateLimit } from "express-rate-limit";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { registerAllTools } from "./tools/index.js";
+import { createDynamoClient, createOAuthStore, oauthTableName, type TokenSession } from "./store.js";
 
 // ---------------------------------------------------------------------------
 // Startup validation — fail fast if required config is missing
@@ -13,6 +14,8 @@ const REQUIRED_ENV = [
   "SPARROWDESK_CLIENT_ID",
   "SPARROWDESK_CLIENT_SECRET",
   "SPARROWDESK_OAUTH_ISSUER",
+  "DYNAMO_REGION",
+  "DYNAMO_PREFIX",
 ];
 for (const key of REQUIRED_ENV) {
   if (!process.env[key]) {
@@ -30,6 +33,9 @@ console.log("[startup] Config:", JSON.stringify({
   SD_TOKEN_URL: process.env.SPARROWDESK_OAUTH_TOKEN_URL ?? "(derived)",
   SD_CLIENT_ID: process.env.SPARROWDESK_CLIENT_ID,
   PORT: process.env.PORT ?? "(default 3000)",
+  DYNAMO_REGION: process.env.DYNAMO_REGION,
+  DYNAMO_PREFIX: process.env.DYNAMO_PREFIX,
+  DYNAMO_ENDPOINT: process.env.DYNAMO_ENDPOINT ?? "(default)",
 }));
 
 const API_BASE = (process.env.SPARROWDESK_API_BASE ?? "https://api.sparrowdesk.com/v1").replace(/\/$/, "");
@@ -64,56 +70,48 @@ const KNOWN_OAUTH_ERRORS = new Set([
 ]);
 
 // ---------------------------------------------------------------------------
-// In-memory OAuth state — single-process only. With multiple replicas, dynamic
-// client registration (/oauth/register) and the rest of the OAuth flow can land
-// on different instances → "unknown client_id" and empty pendingAuth. Fix:
-// run one replica, enable sticky sessions for this service, or add shared storage.
+// OAuth state — shared across replicas in DynamoDB
 // ---------------------------------------------------------------------------
-interface PendingAuth {
-  clientRedirectUri: string;
-  clientState: string;
-  codeChallenge?: string;
-  codeChallengeMethod?: string;
-  scope?: string;
-}
-interface PendingCode {
-  token: string;
-  refreshToken: string;
-  expiresIn: number;
-  clientRedirectUri: string;
-  codeChallenge?: string;
-  codeChallengeMethod?: string;
-}
-interface TokenSession {
-  sdToken: string;
-  refreshToken: string;
-  expiresAt: number; // ms epoch
-}
+const store = createOAuthStore({
+  client: createDynamoClient(process.env.DYNAMO_REGION!, process.env.DYNAMO_ENDPOINT),
+  tableName: oauthTableName(process.env.DYNAMO_PREFIX!),
+  encryptionSecret: SD_CLIENT_SECRET,
+});
 
-const pendingAuth = new Map<string, PendingAuth>();
-const pendingCodes = new Map<string, PendingCode>();
-const sessions = new Map<string, TokenSession>();
-const registeredClients = new Map<string, { redirectUris: string[] }>();
+const CLIENT_TTL_SECONDS = 24 * 60 * 60;
+const PENDING_TTL_SECONDS = 10 * 60;
+const SESSION_TTL_SECONDS = 30 * 24 * 60 * 60;
+const REFRESH_LEASE_SECONDS = 15;
+const REFRESH_WAIT_ATTEMPTS = 20;
+const REFRESH_WAIT_MS = 250;
 
-// Max sizes to prevent memory-exhaustion DoS
-const MAX_REGISTERED_CLIENTS = 1000;
-const MAX_PENDING_AUTH = 1000;
-const MAX_PENDING_CODES = 1000;
-const MAX_SESSIONS = 10000;
-
-function expireAfter(map: Map<string, unknown>, key: string, ms = 10 * 60 * 1000) {
-  setTimeout(() => map.delete(key), ms);
+// SparrowDesk revokes the old refresh token on every refresh, so only one
+// replica may refresh a session; the others wait for its write.
+async function awaitRefresh(mcpToken: string, staleVersion: string): Promise<TokenSession | null> {
+  for (let attempt = 0; attempt < REFRESH_WAIT_ATTEMPTS; attempt++) {
+    const stored = await store.get("session", mcpToken);
+    if (!stored) return null;
+    if (stored.version !== staleVersion) return stored.value;
+    await new Promise((resolve) => setTimeout(resolve, REFRESH_WAIT_MS));
+  }
+  console.warn(`[session] token=${mcpToken.slice(0, 8)} gave up waiting for another refresh`);
+  return null;
 }
 
 async function refreshSession(mcpToken: string): Promise<TokenSession | null> {
   const hint = mcpToken.slice(0, 8);
-  const session = sessions.get(mcpToken);
-  if (!session) {
-    console.warn(`[session] token=${hint} not found in sessions map (size=${sessions.size})`);
+  const stored = await store.get("session", mcpToken);
+  if (!stored) {
+    console.warn(`[session] token=${hint} not found in store`);
     return null;
   }
+  const session = stored.value;
   if (Date.now() < session.expiresAt) {
     return session;
+  }
+
+  if (!(await store.claim("session", mcpToken, stored.version, REFRESH_LEASE_SECONDS))) {
+    return awaitRefresh(mcpToken, stored.version);
   }
 
   const ttlLeft = session.expiresAt - Date.now();
@@ -133,7 +131,7 @@ async function refreshSession(mcpToken: string): Promise<TokenSession | null> {
   if (!tokenRes.ok) {
     const body = await tokenRes.text();
     console.error(`[session] token=${hint} refresh failed status=${tokenRes.status} body=${body}`);
-    sessions.delete(mcpToken);
+    await store.remove("session", mcpToken, stored.version);
     return null;
   }
 
@@ -143,7 +141,7 @@ async function refreshSession(mcpToken: string): Promise<TokenSession | null> {
     refreshToken: data.refresh_token ?? session.refreshToken,
     expiresAt: Date.now() + (data.expires_in ?? 3600) * 1000,
   };
-  sessions.set(mcpToken, updated);
+  await store.put("session", mcpToken, updated, SESSION_TTL_SECONDS);
   console.log(`[session] token=${hint} refreshed ok expires_in=${data.expires_in ?? 3600}s`);
   return updated;
 }
@@ -416,7 +414,7 @@ app.get("/.well-known/oauth-authorization-server", (_req, res) => {
 });
 
 // Dynamic client registration (RFC 7591)
-app.post(["/oauth/register", "/mcp/oauth/register"], authLimiter, (req, res) => {
+app.post(["/oauth/register", "/mcp/oauth/register"], authLimiter, async (req, res) => {
   const { redirect_uris, client_name } = req.body as { redirect_uris?: string[]; client_name?: string };
 
   console.log(`[register] client_name=${client_name ?? "(none)"} redirect_uris=${JSON.stringify(redirect_uris)}`);
@@ -438,15 +436,8 @@ app.post(["/oauth/register", "/mcp/oauth/register"], authLimiter, (req, res) => 
     return;
   }
 
-  if (registeredClients.size >= MAX_REGISTERED_CLIENTS) {
-    console.warn(`[register] rejected: client cap reached (${registeredClients.size})`);
-    res.status(429).json({ error: "too_many_requests", error_description: "Client registration limit reached" });
-    return;
-  }
-
   const clientId = crypto.randomBytes(16).toString("hex");
-  registeredClients.set(clientId, { redirectUris: redirect_uris });
-  expireAfter(registeredClients as Map<string, unknown>, clientId, 24 * 60 * 60 * 1000);
+  await store.put("client", clientId, { redirectUris: redirect_uris }, CLIENT_TTL_SECONDS);
   console.log(`[register] ok client_id=${clientId} client_name=${client_name ?? "unknown"} redirect_uris=${JSON.stringify(redirect_uris)}`);
 
   res.status(201).json({
@@ -467,7 +458,7 @@ app.get("/.well-known/oauth-protected-resource", (_req, res) => {
   });
 });
 
-app.get(["/oauth/authorize", "/mcp/oauth/authorize"], authLimiter, (req, res) => {
+app.get(["/oauth/authorize", "/mcp/oauth/authorize"], authLimiter, async (req, res) => {
   const { client_id, redirect_uri, state, code_challenge, code_challenge_method, scope } = req.query as Record<string, string>;
 
   console.log(`[authorize] client_id=${client_id} redirect_uri=${redirect_uri} scope=${scope} pkce=${code_challenge_method ?? "none"} state=${state?.slice(0, 8)}`);
@@ -478,9 +469,9 @@ app.get(["/oauth/authorize", "/mcp/oauth/authorize"], authLimiter, (req, res) =>
     return;
   }
 
-  const client = registeredClients.get(client_id);
+  const client = (await store.get("client", client_id))?.value;
   if (!client) {
-    console.warn(`[authorize] rejected: unknown client_id=${client_id} (registered=${registeredClients.size})`);
+    console.warn(`[authorize] rejected: unknown client_id=${client_id}`);
     res.status(400).json({ error: "invalid_client", error_description: "Unknown client_id" });
     return;
   }
@@ -497,12 +488,6 @@ app.get(["/oauth/authorize", "/mcp/oauth/authorize"], authLimiter, (req, res) =>
     return;
   }
 
-  if (pendingAuth.size >= MAX_PENDING_AUTH) {
-    console.warn(`[authorize] rejected: pendingAuth cap reached (${pendingAuth.size})`);
-    res.status(429).json({ error: "too_many_requests" });
-    return;
-  }
-
   // Allowlist scope values — strip any unknown scopes, fall back to DEFAULT_SCOPE
   const requestedScopes = scope?.split(" ").filter((s) => ALLOWED_SCOPES.has(s)) ?? [];
   const finalScope = requestedScopes.length ? requestedScopes.join(" ") : DEFAULT_SCOPE;
@@ -511,14 +496,13 @@ app.get(["/oauth/authorize", "/mcp/oauth/authorize"], authLimiter, (req, res) =>
   }
 
   const internalState = crypto.randomBytes(16).toString("hex");
-  pendingAuth.set(internalState, {
+  await store.put("auth", internalState, {
     clientRedirectUri: redirect_uri,
     clientState: state,
     codeChallenge: code_challenge,
     codeChallengeMethod: code_challenge_method,
     scope: finalScope,
-  });
-  expireAfter(pendingAuth, internalState);
+  }, PENDING_TTL_SECONDS);
 
   const params = new URLSearchParams({
     client_id: SD_CLIENT_ID,
@@ -545,13 +529,12 @@ app.get(["/oauth/callback", "/mcp/oauth/callback"], async (req, res) => {
     return;
   }
 
-  const pending = pendingAuth.get(state);
+  const pending = state ? await store.take("auth", state) : null;
   if (!pending) {
-    console.warn(`[callback] state=${state?.slice(0, 8)} not found in pendingAuth (size=${pendingAuth.size}) — likely expired or replayed`);
+    console.warn(`[callback] state=${state?.slice(0, 8)} not found in store — likely expired or replayed`);
     res.status(400).json({ error: "invalid_request", error_description: "Invalid or expired state" });
     return;
   }
-  pendingAuth.delete(state);
 
   console.log(`[callback] state ok, exchanging code with upstream url=${SD_TOKEN_URL} redirect_uri=${MCP_PUBLIC_URL}/oauth/callback`);
 
@@ -577,22 +560,15 @@ app.get(["/oauth/callback", "/mcp/oauth/callback"], async (req, res) => {
   const tokenData = await tokenRes.json() as { access_token: string; refresh_token: string; expires_in?: number };
   console.log(`[callback] upstream token exchange ok expires_in=${tokenData.expires_in ?? 3600}s has_refresh=${!!tokenData.refresh_token}`);
 
-  if (pendingCodes.size >= MAX_PENDING_CODES) {
-    console.warn(`[callback] pendingCodes cap reached (${pendingCodes.size})`);
-    res.status(429).json({ error: "too_many_requests" });
-    return;
-  }
-
   const ourCode = crypto.randomBytes(16).toString("hex");
-  pendingCodes.set(ourCode, {
+  await store.put("code", ourCode, {
     token: tokenData.access_token,
     refreshToken: tokenData.refresh_token,
     expiresIn: tokenData.expires_in ?? 3600,
     clientRedirectUri: pending.clientRedirectUri,
     codeChallenge: pending.codeChallenge,
     codeChallengeMethod: pending.codeChallengeMethod,
-  });
-  expireAfter(pendingCodes, ourCode);
+  }, PENDING_TTL_SECONDS);
 
   const redirectUrl = new URL(pending.clientRedirectUri);
   redirectUrl.searchParams.set("code", ourCode);
@@ -627,14 +603,14 @@ app.get(["/oauth/callback", "/mcp/oauth/callback"], async (req, res) => {
 </html>`);
 });
 
-app.post(["/oauth/token", "/mcp/oauth/token"], authLimiter, (req, res) => {
+app.post(["/oauth/token", "/mcp/oauth/token"], authLimiter, async (req, res) => {
   const { code, code_verifier, redirect_uri } = req.body as Record<string, string>;
 
   console.log(`[token] code=${code?.slice(0, 8)} redirect_uri=${redirect_uri} pkce_verifier=${code_verifier ? "present" : "absent"}`);
 
-  const pending = pendingCodes.get(code);
+  const pending = code ? (await store.get("code", code))?.value : null;
   if (!pending) {
-    console.warn(`[token] code=${code?.slice(0, 8)} not found in pendingCodes (size=${pendingCodes.size}) — likely expired or already used`);
+    console.warn(`[token] code=${code?.slice(0, 8)} not found in store — likely expired or already used`);
     res.status(400).json({ error: "invalid_grant", error_description: "Invalid or expired code" });
     return;
   }
@@ -659,19 +635,18 @@ app.post(["/oauth/token", "/mcp/oauth/token"], authLimiter, (req, res) => {
     return;
   }
 
-  if (sessions.size >= MAX_SESSIONS) {
-    console.warn(`[token] sessions cap reached (${sessions.size})`);
-    res.status(429).json({ error: "too_many_requests" });
+  if (!(await store.take("code", code))) {
+    console.warn(`[token] code=${code?.slice(0, 8)} already redeemed by a concurrent request`);
+    res.status(400).json({ error: "invalid_grant", error_description: "Invalid or expired code" });
     return;
   }
 
-  pendingCodes.delete(code);
   const mcpToken = crypto.randomBytes(32).toString("hex");
-  sessions.set(mcpToken, {
+  await store.put("session", mcpToken, {
     sdToken: pending.token,
     refreshToken: pending.refreshToken,
     expiresAt: Date.now() + (pending.expiresIn ?? 3600) * 1000,
-  });
+  }, SESSION_TTL_SECONDS);
   console.log(`[token] ok session created token=${mcpToken.slice(0, 8)} expires_in=${pending.expiresIn ?? 3600}s`);
   res.json({ access_token: mcpToken, token_type: "Bearer" });
 });
@@ -731,6 +706,16 @@ app.all("/mcp", mcpLimiter, async (req, res) => {
   await server.connect(transport);
   await transport.handleRequest(req, res, req.body);
 });
+
+try {
+  const { ttlEnabled } = await store.ready();
+  if (!ttlEnabled) {
+    console.warn(`[startup] TTL is not enabled on expiresAt for ${oauthTableName(process.env.DYNAMO_PREFIX!)}; expired items will never be deleted`);
+  }
+} catch (err) {
+  console.error("[startup] DynamoDB OAuth table is not usable:", err);
+  process.exit(1);
+}
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`SparrowDesk MCP server running on port ${PORT}`);

@@ -163,7 +163,7 @@ No tool prompts for auth on demand; the whole server is behind OAuth.
 - Note for the reviewer: ticket content is customer support correspondence, so
   it can contain personal data that the account's own users entered. The
   connector reads and writes it under the signed-in user's permissions and
-  stores nothing beyond in-memory OAuth session state.
+  stores nothing beyond encrypted OAuth session state.
 
 ## Step 9 — Test & launch
 
@@ -194,7 +194,7 @@ Seven acknowledgments, all required. Notes on the ones with substance:
   instruct Claude to call other software or fetch behavioural instructions.
 - **Conversation data collection:** the server stores no conversation data;
   requests are proxied to the SparrowDesk API and only OAuth session state is
-  held in memory.
+  stored, encrypted, in DynamoDB.
 - **Public documentation:** live at `developer.sparrowdesk.com/mcp`.
 
 ---
@@ -205,11 +205,7 @@ Seven acknowledgments, all required. Notes on the ones with substance:
    (`src/index.ts`). Traffic from Claude arrives from Anthropic's shared egress
    addresses, so many users — and the reviewer — can collectively exhaust one
    bucket and see 429s. Key the limiter on the bearer token instead.
-2. **OAuth sessions are in-memory.** A restart or a second replica signs
-   everyone out (`src/index.ts` notes this), and `MAX_SESSIONS` (10,000) has no
-   eviction, so a full map rejects new sign-ins with 429. Fine for a small beta,
-   thin for a directory listing.
-3. **`MCP_PUBLIC_URL` defaults to `https://mcp.campaignsparrow.com`.** Reviewers
+2. **`MCP_PUBLIC_URL` defaults to `https://mcp.campaignsparrow.com`.** Reviewers
    expect the server domain to match the service. Production sets the env var,
    so this is cosmetic — but worth changing the default to
    `https://mcp.sparrowdesk.com` once you've confirmed nothing relies on it.
