@@ -305,7 +305,7 @@ Parameters: `starting_after`, `per_page`, `search`.
 
 ## Privacy Policy
 
-This server proxies requests to the SparrowDesk API on behalf of the signed-in user. It stores no ticket, contact, or Knowledge Base content, only in-memory OAuth session state (access and refresh tokens), which it discards when the process restarts. What the server can read or write is bounded by the permissions of the SparrowDesk account you sign in with, and SparrowDesk records every action against your user.
+This server proxies requests to the SparrowDesk API on behalf of the signed-in user. It stores no ticket, contact, or Knowledge Base content, only OAuth session state (access and refresh tokens). That state is kept encrypted in DynamoDB and deleted after 30 days without use. What the server can read or write is bounded by the permissions of the SparrowDesk account you sign in with, and SparrowDesk records every action against your user.
 
 Data collection, storage, retention, third-party sharing, and contact details are covered in the [SparrowDesk Privacy Policy](https://www.sparrowdesk.com/legal/privacy-policy). Use of SparrowDesk is governed by the [Terms of Service](https://www.sparrowdesk.com/legal/terms-of-service).
 
