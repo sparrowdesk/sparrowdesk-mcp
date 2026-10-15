@@ -35,7 +35,7 @@ The response shows `clientSecret` once. `redirectUri` must equal `{MCP_PUBLIC_UR
 
 The local public API validates OAuth tokens by hashing them with `OAUTH_ENCRYPTION_KEY`, and that key must match the helpdesk application's. If tool calls return 401 and the public API logs `OAuth encryption key not configured`, add `OAUTH_ENCRYPTION_KEY` from `application/public-api/.env.template` to `application/public-api/.env` in `sd-app-backend`, then restart the public API and nginx containers.
 
-The server exits at startup if `SPARROWDESK_CLIENT_ID`, `SPARROWDESK_CLIENT_SECRET`, `SPARROWDESK_OAUTH_ISSUER`, `DYNAMO_REGION`, or `DYNAMO_PREFIX` is missing, or if the DynamoDB table is not there. It logs the config it resolved.
+The server exits at startup if `SPARROWDESK_CLIENT_ID`, `SPARROWDESK_CLIENT_SECRET`, `SPARROWDESK_OAUTH_ISSUER`, `DYNAMO_REGION`, or `DYNAMO_PREFIX` is missing, and logs the config it resolved. A missing DynamoDB table does not stop it: `/health` still answers, while the OAuth endpoints and `/mcp` return 503 until the table exists (see step 3).
 
 `MCP_PUBLIC_URL` is optional, but set it anyway. It defaults to `https://mcp.campaignsparrow.com`, and the OAuth discovery endpoints advertise that value verbatim, so clients get sent to the wrong host.
 
@@ -60,6 +60,8 @@ npm run create-table
 ```
 
 This creates the table with a string partition key `pk`, on-demand billing, and TTL on the `expiresAt` attribute. Deployed environments need the same table, plus `GetItem`, `PutItem`, `UpdateItem`, `DeleteItem`, `DescribeTable` and `DescribeTimeToLive` on it for the pod's role. The server picks up AWS credentials from the default provider chain.
+
+To create the table in a deployed environment, open a terminal in the running pod (for example from ArgoCD) and run `node dist/create-table.js`; this also needs `CreateTable` and `UpdateTimeToLive` for the pod's role. The server re-checks the table every few seconds, so no restart is needed afterwards; the log shows `[store] DynamoDB table … is ready`.
 
 ### 4. Run the server
 

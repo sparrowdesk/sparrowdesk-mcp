@@ -82,6 +82,39 @@ const SESSION_TTL_SECONDS = 30 * 24 * 60 * 60;
 const REFRESH_LEASE_SECONDS = 15;
 const REFRESH_WAIT_ATTEMPTS = 20;
 const REFRESH_WAIT_MS = 250;
+const STORE_RECHECK_MS = 5000;
+
+// A missing table must not crash the process: /health keeps passing so the pod
+// stays up to run `node dist/create-table.js` in, and the gate re-checks lazily.
+let storeReady = false;
+let storeCheckedAt = 0;
+
+async function checkStore(logFailure: boolean) {
+  storeCheckedAt = Date.now();
+  try {
+    const { ttlEnabled } = await store.ready();
+    if (!ttlEnabled) {
+      console.warn(`[store] TTL is not enabled on expiresAt for ${oauthTable.table().name}; expired items will never be deleted`);
+    }
+    storeReady = true;
+    console.log(`[store] DynamoDB table ${oauthTable.table().name} is ready`);
+  } catch (err) {
+    if (logFailure) {
+      console.error(`[store] DynamoDB table ${oauthTable.table().name} is not usable; OAuth and /mcp return 503 until it is (create it with: node dist/create-table.js)`, err);
+    }
+  }
+}
+
+async function requireStore(_req: express.Request, res: express.Response, next: express.NextFunction) {
+  if (!storeReady && Date.now() - storeCheckedAt > STORE_RECHECK_MS) {
+    await checkStore(false);
+  }
+  if (storeReady) {
+    next();
+    return;
+  }
+  res.status(503).json({ error: "temporarily_unavailable", error_description: "OAuth store is not ready" });
+}
 
 // SparrowDesk revokes the old refresh token on every refresh, so only one
 // replica may refresh a session; the others wait for its write.
@@ -412,7 +445,7 @@ app.get("/.well-known/oauth-authorization-server", (_req, res) => {
 });
 
 // Dynamic client registration (RFC 7591)
-app.post(["/oauth/register", "/mcp/oauth/register"], authLimiter, async (req, res) => {
+app.post(["/oauth/register", "/mcp/oauth/register"], authLimiter, requireStore, async (req, res) => {
   const { redirect_uris, client_name } = req.body as { redirect_uris?: string[]; client_name?: string };
 
   console.log(`[register] client_name=${client_name ?? "(none)"} redirect_uris=${JSON.stringify(redirect_uris)}`);
@@ -456,7 +489,7 @@ app.get("/.well-known/oauth-protected-resource", (_req, res) => {
   });
 });
 
-app.get(["/oauth/authorize", "/mcp/oauth/authorize"], authLimiter, async (req, res) => {
+app.get(["/oauth/authorize", "/mcp/oauth/authorize"], authLimiter, requireStore, async (req, res) => {
   const { client_id, redirect_uri, state, code_challenge, code_challenge_method, scope } = req.query as Record<string, string>;
 
   console.log(`[authorize] client_id=${client_id} redirect_uri=${redirect_uri} scope=${scope} pkce=${code_challenge_method ?? "none"} state=${state?.slice(0, 8)}`);
@@ -515,7 +548,7 @@ app.get(["/oauth/authorize", "/mcp/oauth/authorize"], authLimiter, async (req, r
   res.redirect(upstreamUrl);
 });
 
-app.get(["/oauth/callback", "/mcp/oauth/callback"], async (req, res) => {
+app.get(["/oauth/callback", "/mcp/oauth/callback"], requireStore, async (req, res) => {
   const { code, state, error } = req.query as Record<string, string>;
 
   console.log(`[callback] state=${state?.slice(0, 8)} code=${code ? "present" : "missing"} error=${error ?? "none"}`);
@@ -601,7 +634,7 @@ app.get(["/oauth/callback", "/mcp/oauth/callback"], async (req, res) => {
 </html>`);
 });
 
-app.post(["/oauth/token", "/mcp/oauth/token"], authLimiter, async (req, res) => {
+app.post(["/oauth/token", "/mcp/oauth/token"], authLimiter, requireStore, async (req, res) => {
   const { code, code_verifier, redirect_uri } = req.body as Record<string, string>;
 
   console.log(`[token] code=${code?.slice(0, 8)} redirect_uri=${redirect_uri} pkce_verifier=${code_verifier ? "present" : "absent"}`);
@@ -650,7 +683,7 @@ app.post(["/oauth/token", "/mcp/oauth/token"], authLimiter, async (req, res) => 
   res.json({ access_token: mcpToken, token_type: "Bearer" });
 });
 
-app.all("/mcp", mcpLimiter, async (req, res) => {
+app.all("/mcp", mcpLimiter, requireStore, async (req, res) => {
   const origin = req.headers.origin;
   const protocolVersion = req.headers["mcp-protocol-version"] as string | undefined;
   const authHeader = req.headers.authorization;
@@ -706,15 +739,7 @@ app.all("/mcp", mcpLimiter, async (req, res) => {
   await transport.handleRequest(req, res, req.body);
 });
 
-try {
-  const { ttlEnabled } = await store.ready();
-  if (!ttlEnabled) {
-    console.warn(`[startup] TTL is not enabled on expiresAt for ${oauthTable.table().name}; expired items will never be deleted`);
-  }
-} catch (err) {
-  console.error("[startup] DynamoDB OAuth table is not usable:", err);
-  process.exit(1);
-}
+await checkStore(true);
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`SparrowDesk MCP server running on port ${PORT}`);
