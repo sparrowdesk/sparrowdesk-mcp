@@ -259,6 +259,17 @@ const app = express();
 app.set("trust proxy", 1);
 console.log("[startup] Express trust proxy:", app.get("trust proxy"));
 
+// Reject Brotli-encoded request bodies before the body parsers decode them
+// (Node2Shell, CVE-2026-111497). MCP clients send plain JSON.
+app.use((req, res, next) => {
+  const encodings = (req.headers["content-encoding"] ?? "").toLowerCase().split(",");
+  if (encodings.some((e) => e.trim() === "br")) {
+    res.status(415).json({ error: "Unsupported Content-Encoding" });
+    return;
+  }
+  next();
+});
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 
