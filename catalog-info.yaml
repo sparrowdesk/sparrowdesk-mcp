@@ -28,4 +28,4 @@ metadata:
 spec:
   type: service
   lifecycle: production
-  owner: group:default/sparrowdesk-team
+  owner: group:sparrowdesk/sparrowdesk
