@@ -54,6 +54,11 @@ Knowledge Base tools need the collection and article scopes: `VIEW_COLLECTIONS` 
 | `list_conversations_with_replies` | List conversations with their replies inlined in one call |
 | `list_conversation_replies` | List replies for a conversation |
 | `add_conversation_reply` | Add a reply or internal note |
+| **Imports** | |
+| `import_conversations` | Import backdated conversations in bulk, with no notifications or workflows (returns job id) |
+| `get_conversation_import_status` | Poll a conversation import job; maps each `external_id` to its conversation id |
+| `import_conversation_replies` | Import backdated replies and notes, from agents or requesters, into up to 20 conversations |
+| `get_reply_import_status` | Poll a reply import job |
 | **Conversation fields** | |
 | `list_conversation_fields` | List ticket custom field definitions |
 | `get_conversation_field` | Get one conversation field by ID |
@@ -178,6 +183,27 @@ Patch an existing conversation.
 #### `delete_conversation`
 
 Delete a conversation. Parameters: `id` (integer, required).
+
+### Imports
+
+Use these to bring in history (a migration, or demo data). Unlike `create_conversation` and `add_conversation_reply`, imports keep your timestamps, can post as the requester, and send no notifications or run any workflows or SLAs. They need the edit-all-tickets scope. Each `external_id` is used only once, so re-sending a batch skips the items already imported. For a ready-made demo dataset, see [`seed-kit/`](seed-kit/).
+
+#### `import_conversations`
+
+- `conversations` (array, required, 1–100). Each item takes:
+  - `subject`, `description_html` (the opening message, from the requester), `requester` (`{ external_id?, email?, phone?, name? }`; give at least one identifier), `created_at`: all required
+  - `external_id`, `status`, `priority`, `resolved_at` (only for `Resolved`/`Closed`), `assignee_email`, `team_id`, `brand_id`, `tags`, `attachments`, `custom_fields` (`{ field_id, value }`): optional
+- `created_at` and `resolved_at` accept epoch seconds or ISO-8601 with an offset. Neither can be in the future.
+
+Returns a `job_id`. Poll `get_conversation_import_status` (`job_id`) until `status` is `completed`, `partial` or `failed`. Each entry in `results` has the `external_id`, the `conversation_id` and a status (`created`, `skipped` or `failed`).
+
+#### `import_conversation_replies`
+
+- `items` (array, required, 1–20): `{ conversation_id, replies }`, where `replies` (1–100, oldest first) have:
+  - `author_type` (`agent` | `requester`), `author_email` or `author_id`, `html_body`, `created_at` (ISO-8601 with offset): required
+  - `external_id`, `public` (`false` makes an internal note), `to`, `cc`, `bcc`, `attachments`: optional
+
+Each conversation is a separate API call. The tool returns one result per conversation, with its `job_id` (poll `get_reply_import_status`) or an error. If the plan's rate limit is hit, `rate_limited` is `true` and the remaining conversations are marked `not_attempted`, so you can resend just those.
 
 ### Conversation fields
 

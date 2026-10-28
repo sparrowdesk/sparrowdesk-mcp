@@ -39,18 +39,20 @@ first, or the portal will flag every tool for missing titles.
 
 ## Step 3 — Tools
 
-36 tools sync automatically. They group as:
+40 tools sync automatically. They group as:
 
-- **Read-only (20):** `get_conversation`, `list_conversations`,
+- **Read-only (22):** `get_conversation`, `list_conversations`,
   `list_conversations_with_replies`, `list_conversation_replies`,
   `list_conversation_fields`, `get_conversation_field`, `get_contact`,
   `list_contacts`, `list_contact_fields`, `get_bulk_job_status`,
   `list_companies`, `get_company`, `list_helpcenters`, `list_articles`,
   `get_article`, `list_collections`, `get_collection`, `list_members`,
-  `get_me`, `list_tags`
-- **Write, additive (7):** `create_conversation`, `create_conversation_field`,
+  `get_me`, `list_tags`, `get_conversation_import_status`,
+  `get_reply_import_status`
+- **Write, additive (9):** `create_conversation`, `create_conversation_field`,
   `create_contact`, `bulk_create_contacts`, `create_company`,
-  `create_article`, `create_collection`
+  `create_article`, `create_collection`, `import_conversations`,
+  `import_conversation_replies`
 - **Write, destructive (9):** `add_conversation_reply` (sends customer-visible
   email), `update_conversation`, `delete_conversation`,
   `update_conversation_field`, `update_contact`, `delete_contact`,
