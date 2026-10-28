@@ -5,6 +5,7 @@ import { rateLimit } from "express-rate-limit";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { registerAllTools } from "./tools/index.js";
+import type { ApiRequestOptions } from "./tools/types.js";
 import { configureDynamo, createOAuthStore, oauthModel, type TokenSession } from "./store.js";
 
 // ---------------------------------------------------------------------------
@@ -205,7 +206,7 @@ function createServer(authToken: string, sessionHint: string) {
     version: "1.0.0",
   });
 
-  async function apiRequest(url: string, options?: { method?: string; body?: unknown }) {
+  async function apiRequest(url: string, options?: ApiRequestOptions) {
     const method = options?.method ?? "GET";
     console.log(JSON.stringify({ event: "api_call", session: sessionHint, method, url }));
 
@@ -218,6 +219,7 @@ function createServer(authToken: string, sessionHint: string) {
         headers: {
           Authorization: `Bearer ${authToken}`,
           "Content-Type": "application/json",
+          ...options?.headers,
         },
         body: options?.body !== undefined ? JSON.stringify(options.body) : undefined,
         signal: controller.signal,

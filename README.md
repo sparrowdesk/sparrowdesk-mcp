@@ -71,6 +71,19 @@ Knowledge Base tools need the collection and article scopes: `VIEW_COLLECTIONS` 
 | `get_company` | Retrieve a company by ID |
 | `create_company` | Create a company |
 | `update_company` | Update a company |
+| **Notes** | |
+| `list_notes` | List notes on a contact or company |
+| `get_note` | Retrieve a note by ID |
+| `create_note` | Create a note on a contact or company |
+| `update_note` | Update a note |
+| `delete_note` | Delete a note |
+| **Imports** | |
+| `import_conversation` | Import a historical conversation (backdated, no notifications) |
+| `bulk_import_conversations` | Bulk import conversations (returns job id) |
+| `get_conversation_import_status` | Poll a conversation import job |
+| `import_conversation_reply` | Import a historical reply into a conversation |
+| `bulk_import_conversation_replies` | Bulk import replies (returns job id) |
+| `get_reply_import_status` | Poll a reply import job |
 | **Contact fields** | |
 | `list_contact_fields` | List contact field definitions |
 | **Members & tags** | |
@@ -165,7 +178,7 @@ Create a new conversation/ticket in SparrowDesk.
 - `skip_notifications` (boolean, optional) — Suppress notifications for this creation (default: `false`)
 - `custom_fields` (array, optional) — Array of `{ internal_name, value }` objects; `value` is a string, or an array of option ids/names for `multi_select`
 - `tags` (array of strings, optional) — Tag labels to attach; missing tags are created
-- `attachments` (array, optional) — `{ url, file_name?, content_type?, size?, headers? }` objects; files are fetched and attached to the opening message, unfetchable ones are skipped
+- `attachments` (array, optional) — `{ url, file_name?, content_type?, size? }` objects; files are fetched and attached to the opening message, unfetchable ones are skipped
 
 #### `update_conversation`
 
@@ -269,6 +282,25 @@ Update an existing company. Give at least one field besides `id`.
 
 - `id` (integer, required) — The company ID to update
 - `name`, `domains`, `domain`, `phone`, `address`, `notes` — Optional updates
+
+### Notes
+
+Notes on contacts and companies. Every tool takes `parent_type`: `contact` or `company`.
+
+- `list_notes` — `parent_type`, `parent_id`; optional `starting_after`, `per_page`
+- `get_note` — `parent_type`, `id`
+- `create_note` — `parent_type`, `parent_id`, `description` (Markdown); optional `title`, `attachments` (up to 20 `{ url, file_name?, content_type?, size? }`)
+- `update_note` — `parent_type`, `id`; optional `title`, `description`, `attachments` (replaces the whole set; include existing SparrowDesk URLs to keep them)
+- `delete_note` — `parent_type`, `id`
+
+### Imports
+
+Bring history over from another helpdesk. Imported conversations and replies are backdated and send no notifications. Every import tool takes an optional `import_source` label (sent as the `x-import-source` header).
+
+- `import_conversation` — `conversation`: `subject`, `requester` (one of `external_id`, `email`, `phone`; optional `name`), `created_at` (epoch seconds), `description_html`; optional `external_id`, `status`, `priority`, `assignee_email`, `team_id`, `brand_id`, `tags`, `resolved_at`, `attachments`, `custom_fields` (`{ field_id, value }`)
+- `bulk_import_conversations` — `conversations`: array of the same shape. Poll `get_conversation_import_status` with the returned `job_id`
+- `import_conversation_reply` — `conversation_id`, `reply`: `author_type` (`agent` | `requester`), `author_id` or `author_email`, `html_body`, `created_at` (ISO-8601 with offset); optional `external_id`, `public` (false = internal note), `to`, `cc`, `bcc`, `attachments`
+- `bulk_import_conversation_replies` — `conversation_id`, `replies` (oldest first). Poll `get_reply_import_status` with the returned `jobId`
 
 ### Knowledge Base
 

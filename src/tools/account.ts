@@ -7,7 +7,7 @@ export function registerAccountTools({ server, apiRequest, apiBase }: ToolContex
     {
       title: "List team members",
       description: "Retrieve a paginated list of all team members in the SparrowDesk account",
-      annotations: { title: "List team members", readOnlyHint: true },
+      annotations: { title: "List team members", readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       inputSchema: {
         starting_after: z.string().optional().describe("Pagination cursor"),
         per_page: z.number().int().min(1).max(100).optional().describe("Items per page (1-100, default 25)"),
@@ -27,7 +27,7 @@ export function registerAccountTools({ server, apiRequest, apiBase }: ToolContex
     {
       title: "Get account information",
       description: "Retrieve current SparrowDesk account information (account id, subdomain, domain, company name, timezone, language)",
-      annotations: { title: "Get account information", readOnlyHint: true },
+      annotations: { title: "Get account information", readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       inputSchema: {},
     },
     async () => formatResult(await apiRequest(`${apiBase}/me`))
@@ -38,7 +38,7 @@ export function registerAccountTools({ server, apiRequest, apiBase }: ToolContex
     {
       title: "List tags",
       description: "List conversation tags with optional search and pagination",
-      annotations: { title: "List tags", readOnlyHint: true },
+      annotations: { title: "List tags", readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       inputSchema: {
         starting_after: z.string().optional().describe("Pagination cursor"),
         per_page: z.number().int().min(1).max(100).optional().describe("Items per page (1-100, default 25)"),
