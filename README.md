@@ -186,7 +186,7 @@ Delete a conversation. Parameters: `id` (integer, required).
 
 ### Imports
 
-Use these to bring in history (a migration, or demo data). Unlike `create_conversation` and `add_conversation_reply`, imports keep your timestamps, can post as the requester, and send no notifications or run any workflows or SLAs. They need the edit-all-tickets scope. Each `external_id` is used only once, so re-sending a batch skips the items already imported. For a ready-made demo dataset, see [`seed-kit/`](seed-kit/).
+Use these to bring in history (a migration, or demo data). Unlike `create_conversation` and `add_conversation_reply`, imports keep your timestamps, can post as the requester, and send no notifications or run any workflows or SLAs. They need the edit-all-tickets scope. Each `external_id` is used only once, so re-sending a batch skips the items already imported.
 
 #### `import_conversations`
 
