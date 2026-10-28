@@ -7,7 +7,7 @@ export function registerCompanyTools({ server, apiRequest, apiBase }: ToolContex
     {
       title: "List companies",
       description: "List companies in the SparrowDesk account with optional filters and cursor pagination",
-      annotations: { title: "List companies", readOnlyHint: true },
+      annotations: { title: "List companies", readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       inputSchema: {
         starting_after: z.string().optional().describe("Pagination cursor"),
         per_page: z.number().int().min(1).max(100).optional().describe("Items per page (1-100, default 25)"),
@@ -31,7 +31,7 @@ export function registerCompanyTools({ server, apiRequest, apiBase }: ToolContex
     {
       title: "Get company",
       description: "Retrieve a company by ID from SparrowDesk",
-      annotations: { title: "Get company", readOnlyHint: true },
+      annotations: { title: "Get company", readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       inputSchema: { id: z.number().int().describe("The company ID") },
     },
     async ({ id }) => formatResult(await apiRequest(`${apiBase}/companies/${id}`))
@@ -42,7 +42,7 @@ export function registerCompanyTools({ server, apiRequest, apiBase }: ToolContex
     {
       title: "Create company",
       description: "Create a new company in SparrowDesk",
-      annotations: { title: "Create company", readOnlyHint: false, destructiveHint: false },
+      annotations: { title: "Create company", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
       inputSchema: {
         name: z.string().describe("Company name"),
         domains: z.array(z.string()).optional().describe("Domains owned by the company; the first is primary. A domain may belong to only one company"),
@@ -68,7 +68,7 @@ export function registerCompanyTools({ server, apiRequest, apiBase }: ToolContex
     {
       title: "Update company",
       description: "Update an existing company in SparrowDesk",
-      annotations: { title: "Update company", readOnlyHint: false, destructiveHint: true },
+      annotations: { title: "Update company", readOnlyHint: false, destructiveHint: true, openWorldHint: false },
       inputSchema: {
         id: z.number().int().describe("The company ID to update"),
         name: z.string().optional().describe("Company name"),

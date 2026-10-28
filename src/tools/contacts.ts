@@ -9,7 +9,7 @@ export function registerContactTools({ server, apiRequest, apiBase }: ToolContex
     {
       title: "Create contact",
       description: "Create a new contact in SparrowDesk. Either email or phone must be provided.",
-      annotations: { title: "Create contact", readOnlyHint: false, destructiveHint: false },
+      annotations: { title: "Create contact", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
       inputSchema: {
         first_name: z.string().describe("Contact's first name"),
         last_name: z.string().optional().describe("Contact's last name"),
@@ -41,7 +41,7 @@ export function registerContactTools({ server, apiRequest, apiBase }: ToolContex
     {
       title: "Update contact",
       description: "Update an existing contact in SparrowDesk",
-      annotations: { title: "Update contact", readOnlyHint: false, destructiveHint: true },
+      annotations: { title: "Update contact", readOnlyHint: false, destructiveHint: true, openWorldHint: false },
       inputSchema: {
         id: z.number().int().describe("The contact ID to update"),
         first_name: z.string().optional().describe("Contact's first name"),
@@ -76,7 +76,7 @@ export function registerContactTools({ server, apiRequest, apiBase }: ToolContex
     {
       title: "Get contact",
       description: "Retrieve a contact by ID from SparrowDesk",
-      annotations: { title: "Get contact", readOnlyHint: true },
+      annotations: { title: "Get contact", readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       inputSchema: { id: z.number().int().describe("The contact ID") },
     },
     async ({ id }) => formatResult(await apiRequest(`${apiBase}/contacts/${id}`))
@@ -87,7 +87,7 @@ export function registerContactTools({ server, apiRequest, apiBase }: ToolContex
     {
       title: "List contact fields",
       description: "Retrieve all contact fields from SparrowDesk",
-      annotations: { title: "List contact fields", readOnlyHint: true },
+      annotations: { title: "List contact fields", readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       inputSchema: {
         starting_after: z.string().optional().describe("Pagination cursor"),
         per_page: z.number().int().min(1).max(100).optional().describe("Items per page (1-100, default 25)"),
@@ -111,7 +111,7 @@ export function registerContactTools({ server, apiRequest, apiBase }: ToolContex
     {
       title: "List contacts",
       description: "List contacts for the authenticated account (requires view contacts API scope)",
-      annotations: { title: "List contacts", readOnlyHint: true },
+      annotations: { title: "List contacts", readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       inputSchema: {
         search: z.string().optional().describe("Case-sensitive partial match on first name"),
         requested_by_email: z.string().email().optional().describe("Exact match on contact email"),
@@ -137,7 +137,7 @@ export function registerContactTools({ server, apiRequest, apiBase }: ToolContex
     {
       title: "Delete contact",
       description: "Delete a contact by ID from SparrowDesk",
-      annotations: { title: "Delete contact", readOnlyHint: false, destructiveHint: true },
+      annotations: { title: "Delete contact", readOnlyHint: false, destructiveHint: true, openWorldHint: false },
       inputSchema: { id: z.number().int().describe("The contact ID to delete") },
     },
     async ({ id }) => formatResult(await apiRequest(`${apiBase}/contacts/${id}`, { method: "DELETE" }))
@@ -157,7 +157,7 @@ export function registerContactTools({ server, apiRequest, apiBase }: ToolContex
     {
       title: "Bulk create contacts",
       description: "Create multiple contacts in one request; returns a job_id - poll get_bulk_job_status until completed",
-      annotations: { title: "Bulk create contacts", readOnlyHint: false, destructiveHint: false },
+      annotations: { title: "Bulk create contacts", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
       inputSchema: {
         contacts: z.array(bulkContactItemSchema).min(1).describe("Contacts to create (same shape as single create; API validates each row)"),
       },
@@ -170,7 +170,7 @@ export function registerContactTools({ server, apiRequest, apiBase }: ToolContex
     {
       title: "Get bulk job status",
       description: "Get processing status for a bulk contact creation job returned by bulk_create_contacts",
-      annotations: { title: "Get bulk job status", readOnlyHint: true },
+      annotations: { title: "Get bulk job status", readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       inputSchema: { job_id: z.string().describe("Bulk job id (e.g. from bulk_create_contacts response)") },
     },
     async ({ job_id }) => formatResult(await apiRequest(`${apiBase}/bulk/status/${encodeURIComponent(job_id)}`))
