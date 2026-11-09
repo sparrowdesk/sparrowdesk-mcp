@@ -193,6 +193,7 @@ Use these to bring in history (a migration, or demo data). Unlike `create_conver
 - `conversations` (array, required, 1–100). Each item takes:
   - `subject`, `description_html` (the opening message, from the requester), `requester` (`{ external_id?, email?, phone?, name? }`; give at least one identifier), `created_at`: all required
   - `external_id`, `status`, `priority`, `resolved_at` (only for `Resolved`/`Closed`), `assignee_email`, `team_id`, `brand_id`, `tags`, `attachments`, `custom_fields` (`{ field_id, value }`): optional
+- `include_in_reports` (boolean, optional, default `false`): also write each conversation's history to reports, dated to its own timestamps (created, first response, resolution and waiting times). Re-sending an already imported conversation with `true` adds it to reports.
 - `created_at` and `resolved_at` accept epoch seconds or ISO-8601 with an offset. Neither can be in the future.
 
 Returns a `job_id`. Poll `get_conversation_import_status` (`job_id`) until `status` is `completed`, `partial` or `failed`. Each entry in `results` has the `external_id`, the `conversation_id` and a status (`created`, `skipped` or `failed`).
@@ -202,6 +203,7 @@ Returns a `job_id`. Poll `get_conversation_import_status` (`job_id`) until `stat
 - `items` (array, required, 1–20): `{ conversation_id, replies }`, where `replies` (1–100, oldest first) have:
   - `author_type` (`agent` | `requester`), `author_email` or `author_id`, `html_body`, `created_at` (ISO-8601 with offset): required
   - `external_id`, `public` (`false` makes an internal note), `to`, `cc`, `bcc`, `attachments`: optional
+- `include_in_reports` (boolean, optional): recalculate each conversation's report data from its replies and add it to reports. Conversations imported with `include_in_reports` are recalculated even without it.
 
 Each conversation is a separate API call. The tool returns one result per conversation, with its `job_id` (poll `get_reply_import_status`) or an error. If the plan's rate limit is hit, `rate_limited` is `true` and the remaining conversations are marked `not_attempted`, so you can resend just those.
 
