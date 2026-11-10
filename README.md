@@ -86,6 +86,7 @@ Knowledge Base tools need the collection and article scopes: `VIEW_COLLECTIONS` 
 | `list_collections` | List KB collections for a help center |
 | `get_collection` | Get a collection with subcollections and articles |
 | `create_collection` | Create a KB collection |
+| `delete_collection` | Delete a collection and its subcollections (articles revert to draft) |
 | `list_articles` | List articles for a help center |
 | `get_article` | Get one article |
 | `create_article` | Create an article (draft or publish) |
@@ -308,6 +309,7 @@ Reads need `VIEW_COLLECTIONS` / `VIEW_ARTICLES`; writes need `MANAGE_COLLECTIONS
 - `list_collections` — `help_center_id` (required); optional `starting_after`, `per_page`, `collection_id`, `is_root` — needs `VIEW_COLLECTIONS`
 - `get_collection` — `id` — needs `VIEW_COLLECTIONS`
 - `create_collection` — `name`, `help_center_id`, `brand_id`; optional `description`, `parent_collection_id` — needs `MANAGE_COLLECTIONS`
+- `delete_collection` — `id` — deletes nested collections too; articles are detached and unpublished, not deleted — needs `MANAGE_COLLECTIONS`
 - `list_articles` — `help_center_id` (required); optional `published`, `draft`, `archived`, `starting_after`, `per_page`, `search`, `collection_id` — needs `VIEW_ARTICLES`
 - `get_article` — `id` — needs `VIEW_ARTICLES`
 - `create_article` — `help_center_id`, `brand_id`; optional `title`, `content` (HTML), `publish`, `collection_id`, `is_public` (publish flow per the API docs) — needs `MANAGE_ARTICLES`

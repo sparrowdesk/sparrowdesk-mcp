@@ -194,4 +194,15 @@ export function registerHelpCenterTools({ server, apiRequest, apiBase }: ToolCon
       return formatResult(await apiRequest(`${apiBase}/collections`, { method: "POST", body }));
     }
   );
+
+  server.registerTool(
+    "delete_collection",
+    {
+      title: "Delete Knowledge Base collection",
+      description: "Delete a KB collection and every collection nested under it. Articles inside are not deleted: they are detached and, if published, reverted to draft (removed from the help center). Requires MANAGE_COLLECTIONS scope",
+      annotations: { title: "Delete Knowledge Base collection", readOnlyHint: false, destructiveHint: true },
+      inputSchema: { id: z.number().int().describe("Collection ID") },
+    },
+    async ({ id }) => formatResult(await apiRequest(`${apiBase}/collections/${id}`, { method: "DELETE" }))
+  );
 }
