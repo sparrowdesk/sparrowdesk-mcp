@@ -186,15 +186,16 @@ Delete a conversation. Parameters: `id` (integer, required).
 
 ### Imports
 
-Use these to bring in history (a migration, or demo data). Unlike `create_conversation` and `add_conversation_reply`, imports keep your timestamps, can post as the requester, and send no notifications or run any workflows or SLAs. They need the edit-all-tickets scope. Each `external_id` is used only once, so re-sending a batch skips the items already imported.
+Use these to bring in history (a migration, or demo data). Unlike `create_conversation` and `add_conversation_reply`, imports keep your timestamps, can post as the requester, and send no notifications or run any workflows or SLA timers. They need the edit-all-tickets scope. Each `external_id` is used only once, so re-sending a batch skips the items already imported.
 
 #### `import_conversations`
 
 - `conversations` (array, required, 1–100). Each item takes:
   - `subject`, `description_html` (the opening message, from the requester), `requester` (`{ external_id?, email?, phone?, name? }`; give at least one identifier), `created_at`: all required
   - `external_id`, `status`, `priority`, `resolved_at` (only for `Resolved`/`Closed`), `assignee_email`, `team_id`, `brand_id`, `tags`, `attachments`, `custom_fields` (`{ field_id, value }`): optional
-- `include_in_reports` (boolean, optional, default `false`): also write each conversation's history to reports, dated to its own timestamps (created, first response, resolution and waiting times). Re-sending an already imported conversation with `true` adds it to reports.
-- `created_at` and `resolved_at` accept epoch seconds or ISO-8601 with an offset. Neither can be in the future.
+  - `csat` (`{ rating?, comment?, responded_at? }`, optional): a CSAT survey for a `Resolved`/`Closed` conversation, recorded on the account's active email CSAT survey as sent 5 minutes after `resolved_at` (no email). `rating` is on the survey's scale; leave it out (`{}`) for a survey that got no response. `comment` and `responded_at` need a rating; `responded_at` defaults to 45 minutes after the survey was sent. Needs `include_in_reports`.
+- `include_in_reports` (boolean, optional, default `false`): also write each conversation's history to reports, dated to its own timestamps (created, first response, resolution and waiting times). When an active SLA policy matches, it also records whether first response and resolution met the SLA; with `csat`, the survey counts in the CSAT report. Re-sending an already imported conversation with `true` adds it to reports.
+- `created_at`, `resolved_at` and `csat.responded_at` accept epoch seconds or ISO-8601 with an offset. Neither can be in the future.
 
 Returns a `job_id`. Poll `get_conversation_import_status` (`job_id`) until `status` is `completed`, `partial` or `failed`. Each entry in `results` has the `external_id`, the `conversation_id` and a status (`created`, `skipped` or `failed`).
 

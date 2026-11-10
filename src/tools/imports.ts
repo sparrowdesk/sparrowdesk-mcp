@@ -47,6 +47,11 @@ const conversationImportSchema = z.object({
     field_id: z.number().int().positive().describe("Conversation field id (see list_conversation_fields)"),
     value: z.union([z.string(), z.number(), z.boolean()]).describe("Dropdown fields take the option id"),
   })).optional(),
+  csat: z.object({
+    rating: z.number().int().positive().optional().describe("The customer's rating on the account's email CSAT survey scale (e.g. 1-5). Omit for a survey that got no response"),
+    comment: z.string().min(1).max(5000).optional().describe("The customer's comment; needs a rating"),
+    responded_at: timestampSchema.optional().describe("When the customer answered; needs a rating and must be at least 5 minutes after resolved_at. Default 45 minutes after the survey was sent"),
+  }).optional().describe("CSAT survey for a Resolved/Closed conversation; needs include_in_reports. Records a survey sent 5 minutes after resolved_at (no email) on the account's active email CSAT survey; {} means sent with no response"),
 });
 
 const replyImportSchema = z.object({
@@ -68,11 +73,11 @@ export function registerImportTools({ server, apiRequest, apiBase }: ToolContext
     "import_conversations",
     {
       title: "Import conversations",
-      description: "Import historical conversations (tickets) with backdated timestamps. No notifications, workflows or SLAs run. Set include_in_reports to make them count in reports on their own dates. Returns a job_id - poll get_conversation_import_status for the created conversation ids, then add the thread with import_conversation_replies. Requires the edit all tickets scope.",
+      description: "Import historical conversations (tickets) with backdated timestamps. No notifications, workflows or SLA timers run. Set include_in_reports to make them count in reports on their own dates, including SLA outcomes when an active SLA policy matches and CSAT from each conversation's csat. Returns a job_id - poll get_conversation_import_status for the created conversation ids, then add the thread with import_conversation_replies. Requires the edit all tickets scope.",
       annotations: { title: "Import conversations", readOnlyHint: false, destructiveHint: false },
       inputSchema: {
         conversations: z.array(conversationImportSchema).min(1).max(MAX_IMPORT_ITEMS).describe(`Conversations to import (1-${MAX_IMPORT_ITEMS})`),
-        include_in_reports: z.boolean().optional().describe("Also write each conversation's history (created, first response, resolution and waiting times) to reports, dated to its own timestamps. Default false. Re-sending an already imported conversation with true adds it to reports"),
+        include_in_reports: z.boolean().optional().describe("Also write each conversation's history (created, first response, resolution and waiting times, SLA met/breached and CSAT) to reports, dated to its own timestamps. Default false. Re-sending an already imported conversation with true adds it to reports"),
       },
     },
     async ({ conversations, include_in_reports }) => {
@@ -82,6 +87,12 @@ export function registerImportTools({ server, apiRequest, apiBase }: ToolContext
           ...c,
           created_at: toEpochSeconds(c.created_at),
           ...(c.resolved_at !== undefined && { resolved_at: toEpochSeconds(c.resolved_at) }),
+          ...(c.csat && {
+            csat: {
+              ...c.csat,
+              ...(c.csat.responded_at !== undefined && { responded_at: toEpochSeconds(c.csat.responded_at) }),
+            },
+          }),
         })),
       };
       return formatResult(await apiRequest(`${apiBase}/imports/conversations/create_many`, { method: "POST", body }));
@@ -103,14 +114,14 @@ export function registerImportTools({ server, apiRequest, apiBase }: ToolContext
     "import_conversation_replies",
     {
       title: "Import conversation replies",
-      description: `Import historical replies and internal notes into existing conversations, backdated and authored by an agent or the requester. No notifications, workflows or SLAs run. Takes up to ${MAX_REPLY_TARGETS} conversations per call and returns one job_id per conversation (poll get_reply_import_status). Set include_in_reports when the conversations were imported with it, or to add them to reports now. Conversations are sent in order; if the rate limit is hit, the rest are returned as not_attempted to retry later. Requires the edit all tickets scope.`,
+      description: `Import historical replies and internal notes into existing conversations, backdated and authored by an agent or the requester. No notifications, workflows or SLA timers run. Takes up to ${MAX_REPLY_TARGETS} conversations per call and returns one job_id per conversation (poll get_reply_import_status). Set include_in_reports when the conversations were imported with it, or to add them to reports now. Conversations are sent in order; if the rate limit is hit, the rest are returned as not_attempted to retry later. Requires the edit all tickets scope.`,
       annotations: { title: "Import conversation replies", readOnlyHint: false, destructiveHint: false },
       inputSchema: {
         items: z.array(z.object({
           conversation_id: z.union([z.number().int().positive(), z.string().regex(/^\d+$/)]).describe("Conversation id, as returned by get_conversation_import_status or list_conversations"),
           replies: z.array(replyImportSchema).min(1).max(MAX_IMPORT_ITEMS).describe(`Replies for this conversation, oldest first (1-${MAX_IMPORT_ITEMS})`),
         })).min(1).max(MAX_REPLY_TARGETS).describe(`Conversations and their replies (1-${MAX_REPLY_TARGETS})`),
-        include_in_reports: z.boolean().optional().describe("Recalculate each conversation's report data (first response and waiting times) from its replies and add it to reports. Conversations imported with include_in_reports are recalculated even without it"),
+        include_in_reports: z.boolean().optional().describe("Recalculate each conversation's report data (first response and waiting times, and the SLA first-response outcome) from its replies and add it to reports. Conversations imported with include_in_reports are recalculated even without it"),
       },
     },
     async ({ items, include_in_reports }) => {
