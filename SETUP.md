@@ -95,7 +95,7 @@ Your client opens a browser window to complete the OAuth login with your Sparrow
 
 ## Docker
 
-The image builds TypeScript and runs `dist/index.js` on port 3000. It reads no `.env` of its own, so pass the config in:
+The image builds TypeScript and runs `dist/index.js` (with the New Relic agent preloaded) on port 3000. It reads no `.env` of its own, so pass the config in:
 
 ```bash
 docker build -t sparrowdesk-mcp .
@@ -103,6 +103,36 @@ docker run --rm -p 3000:3000 --env-file .env sparrowdesk-mcp
 ```
 
 Inside the container `localhost` is the container itself, so point `DYNAMO_ENDPOINT` at `http://host.docker.internal:8000` to reach DynamoDB Local on the host.
+
+## Observability
+
+**Logs (Loki, `{container="mcp-app"}`).** Each authenticated `/mcp` request logs one line naming the JSON-RPC method, the tool for `tools/call`, and a trace id:
+
+```
+[mcp] session=18b20444 ok, handling POST request rpc=tools/call tool=list_conversations trace=mcp-6f1c…
+{"event":"api_call","session":"18b20444","trace":"mcp-6f1c…","method":"GET","url":"https://api.sparrowdesk.com/v1/conversations"}
+```
+
+Tool names a client sends that this server does not register are logged as `tool=unknown`, and methods outside the MCP spec as `rpc=other`.
+
+```logql
+# tool calls per tool, per day
+sum by (tool) (count_over_time({container="mcp-app"} |= "rpc=tools/call" | regexp `tool=(?P<tool>\S+)` [1d]))
+```
+
+**Following a request across services.** The trace id goes to the public API as `x-sd-trace-id` and comes back on the response in the same header. public-api and helpdesk take that header as their own request id (the third bracket of their log lines) and pass it on, so one id finds the request in all three:
+
+```logql
+{container=~"mcp-app|public-api-app|helpdesk"} |= "mcp-6f1c…"
+```
+
+**New Relic.** The image starts the agent (`node --import newrelic/esm-loader.mjs -r newrelic`). It reports when `NEW_RELIC_LICENSE_KEY` (Vault) and `NEW_RELIC_APP_NAME` (config repo) are set, and stays off otherwise. Transactions are named `mcp/<method>[/<tool>]` and carry `mcp.rpc`, `mcp.tool`, `mcp.session` and `sd.traceId`. Distributed tracing links the outgoing call to the public API's transaction:
+
+```sql
+SELECT count(*) FROM Transaction WHERE appName = 'SparrowDesk-MCP-Production' FACET mcp.tool SINCE 1 day ago
+```
+
+Locally, `npm run dev` does not load the agent; `.env.template` sets `NEW_RELIC_ENABLED=false` for `npm start`.
 
 ## Testing the Deployed Server
 

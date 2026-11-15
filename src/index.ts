@@ -6,6 +6,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { registerAllTools } from "./tools/index.js";
 import { configureDynamo, createOAuthStore, oauthModel, type TokenSession } from "./store.js";
+import { TRACE_HEADER, describeRpc, newTraceId, recordMcpTransaction } from "./observability.js";
 
 // ---------------------------------------------------------------------------
 // Startup validation — fail fast if required config is missing
@@ -199,7 +200,7 @@ const ALLOWED_SCOPES = new Set(DEFAULT_SCOPE.split(" "));
 // ---------------------------------------------------------------------------
 // MCP server factory
 // ---------------------------------------------------------------------------
-function createServer(authToken: string, sessionHint: string) {
+function createServer(authToken: string, sessionHint: string, traceId: string) {
   const server = new McpServer({
     name: "sparrowdesk",
     version: "1.0.0",
@@ -207,7 +208,7 @@ function createServer(authToken: string, sessionHint: string) {
 
   async function apiRequest(url: string, options?: { method?: string; body?: unknown }) {
     const method = options?.method ?? "GET";
-    console.log(JSON.stringify({ event: "api_call", session: sessionHint, method, url }));
+    console.log(JSON.stringify({ event: "api_call", session: sessionHint, trace: traceId, method, url }));
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 10_000);
@@ -218,6 +219,7 @@ function createServer(authToken: string, sessionHint: string) {
         headers: {
           Authorization: `Bearer ${authToken}`,
           "Content-Type": "application/json",
+          [TRACE_HEADER]: traceId,
         },
         body: options?.body !== undefined ? JSON.stringify(options.body) : undefined,
         signal: controller.signal,
@@ -249,6 +251,15 @@ function createServer(authToken: string, sessionHint: string) {
 
   return server;
 }
+
+// Registered tool names, so request logs and New Relic only ever carry a name
+// this server defines (a client can put anything in tools/call params.name).
+const KNOWN_TOOLS: ReadonlySet<string> = (() => {
+  const names = new Set<string>();
+  const recorder = { registerTool: (name: string) => { names.add(name); } } as unknown as McpServer;
+  registerAllTools({ server: recorder, apiRequest: async () => ({ data: null }), apiBase: API_BASE });
+  return names;
+})();
 
 // ---------------------------------------------------------------------------
 // Express app
@@ -742,9 +753,13 @@ app.all("/mcp", mcpLimiter, requireStore, async (req, res) => {
   }
 
   const sessionHint = token.slice(0, 8);
-  console.log(`[mcp] session=${sessionHint} ok, handling ${req.method} request`);
+  const traceId = newTraceId();
+  const rpc = describeRpc(req.body, KNOWN_TOOLS);
+  console.log(`[mcp] session=${sessionHint} ok, handling ${req.method} request rpc=${rpc.rpc}${rpc.tool ? ` tool=${rpc.tool}` : ""} trace=${traceId}`);
+  recordMcpTransaction(rpc, sessionHint, traceId);
+  res.setHeader(TRACE_HEADER, traceId);
 
-  const server = createServer(session.sdToken, sessionHint);
+  const server = createServer(session.sdToken, sessionHint, traceId);
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
   await server.connect(transport);
   await transport.handleRequest(req, res, req.body);
