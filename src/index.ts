@@ -6,7 +6,17 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { registerAllTools } from "./tools/index.js";
 import { configureDynamo, createOAuthStore, oauthModel, type TokenSession } from "./store.js";
-import { TRACE_HEADER, describeRpc, newTraceId, recordMcpTransaction } from "./observability.js";
+import {
+  TRACE_HEADER,
+  accountForLegacySession,
+  cleanClientName,
+  describeRpc,
+  lookupAccountId as lookupAccountIdAt,
+  newTraceId,
+  recordMcpTransaction,
+  watchToolResult,
+  type CallContext,
+} from "./observability.js";
 
 // ---------------------------------------------------------------------------
 // Startup validation — fail fast if required config is missing
@@ -40,6 +50,7 @@ console.log("[startup] Config:", JSON.stringify({
 }));
 
 const API_BASE = (process.env.SPARROWDESK_API_BASE ?? "https://api.sparrowdesk.com/v1").replace(/\/$/, "");
+const lookupAccountId = (sdToken: string) => lookupAccountIdAt(API_BASE, sdToken);
 const parsedPort = parseInt(process.env.PORT ?? "");
 const PORT = Number.isNaN(parsedPort) ? 3000 : parsedPort;
 
@@ -172,6 +183,8 @@ async function refreshSession(mcpToken: string): Promise<TokenSession | null> {
     sdToken: data.access_token,
     refreshToken: data.refresh_token ?? session.refreshToken,
     expiresAt: Date.now() + (data.expires_in ?? 3600) * 1000,
+    accountId: session.accountId,
+    clientName: session.clientName,
   };
   await store.put("session", mcpToken, updated, SESSION_TTL_SECONDS);
   console.log(`[session] token=${hint} refreshed ok expires_in=${data.expires_in ?? 3600}s`);
@@ -200,7 +213,7 @@ const ALLOWED_SCOPES = new Set(DEFAULT_SCOPE.split(" "));
 // ---------------------------------------------------------------------------
 // MCP server factory
 // ---------------------------------------------------------------------------
-function createServer(authToken: string, sessionHint: string, traceId: string) {
+function createServer(authToken: string, ctx: CallContext) {
   const server = new McpServer({
     name: "sparrowdesk",
     version: "1.0.0",
@@ -208,7 +221,7 @@ function createServer(authToken: string, sessionHint: string, traceId: string) {
 
   async function apiRequest(url: string, options?: { method?: string; body?: unknown }) {
     const method = options?.method ?? "GET";
-    console.log(JSON.stringify({ event: "api_call", session: sessionHint, trace: traceId, method, url }));
+    console.log(JSON.stringify({ event: "api_call", ...ctx, method, url }));
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 10_000);
@@ -219,7 +232,7 @@ function createServer(authToken: string, sessionHint: string, traceId: string) {
         headers: {
           Authorization: `Bearer ${authToken}`,
           "Content-Type": "application/json",
-          [TRACE_HEADER]: traceId,
+          [TRACE_HEADER]: ctx.trace,
         },
         body: options?.body !== undefined ? JSON.stringify(options.body) : undefined,
         signal: controller.signal,
@@ -468,7 +481,8 @@ app.get("/.well-known/oauth-authorization-server", (_req, res) => {
 
 // Dynamic client registration (RFC 7591)
 app.post(["/oauth/register", "/mcp/oauth/register"], authLimiter, requireStore, async (req, res) => {
-  const { redirect_uris, client_name } = req.body as { redirect_uris?: string[]; client_name?: string };
+  const { redirect_uris } = req.body as { redirect_uris?: string[] };
+  const client_name = cleanClientName((req.body as { client_name?: unknown }).client_name);
 
   console.log(`[register] client_name=${client_name ?? "(none)"} redirect_uris=${JSON.stringify(redirect_uris)}`);
 
@@ -490,7 +504,7 @@ app.post(["/oauth/register", "/mcp/oauth/register"], authLimiter, requireStore, 
   }
 
   const clientId = crypto.randomBytes(16).toString("hex");
-  await store.put("client", clientId, { redirectUris: redirect_uris }, CLIENT_TTL_SECONDS);
+  await store.put("client", clientId, { redirectUris: redirect_uris, clientName: client_name }, CLIENT_TTL_SECONDS);
   console.log(`[register] ok client_id=${clientId} client_name=${client_name ?? "unknown"} redirect_uris=${JSON.stringify(redirect_uris)}`);
 
   res.status(201).json({
@@ -555,6 +569,7 @@ app.get(["/oauth/authorize", "/mcp/oauth/authorize"], authLimiter, requireStore,
     codeChallenge: code_challenge,
     codeChallengeMethod: code_challenge_method,
     scope: finalScope,
+    clientName: client.clientName,
   }, PENDING_TTL_SECONDS);
 
   const params = new URLSearchParams({
@@ -621,6 +636,7 @@ app.get(["/oauth/callback", "/mcp/oauth/callback"], requireStore, async (req, re
     clientRedirectUri: pending.clientRedirectUri,
     codeChallenge: pending.codeChallenge,
     codeChallengeMethod: pending.codeChallengeMethod,
+    clientName: pending.clientName,
   }, PENDING_TTL_SECONDS);
 
   const redirectUrl = new URL(pending.clientRedirectUri);
@@ -696,12 +712,15 @@ app.post(["/oauth/token", "/mcp/oauth/token"], authLimiter, requireStore, async 
   }
 
   const mcpToken = crypto.randomBytes(32).toString("hex");
+  const accountId = await lookupAccountId(pending.token);
   await store.put("session", mcpToken, {
     sdToken: pending.token,
     refreshToken: pending.refreshToken,
     expiresAt: Date.now() + (pending.expiresIn ?? 3600) * 1000,
+    accountId,
+    clientName: pending.clientName,
   }, SESSION_TTL_SECONDS);
-  console.log(`[token] ok session created token=${mcpToken.slice(0, 8)} expires_in=${pending.expiresIn ?? 3600}s`);
+  console.log(`[token] ok session created token=${mcpToken.slice(0, 8)} account=${accountId ?? "unknown"} client=${JSON.stringify(pending.clientName ?? "unknown")} expires_in=${pending.expiresIn ?? 3600}s`);
   res.json({ access_token: mcpToken, token_type: "Bearer" });
 });
 
@@ -753,14 +772,16 @@ app.all("/mcp", mcpLimiter, requireStore, async (req, res) => {
   }
 
   const sessionHint = token.slice(0, 8);
-  const traceId = newTraceId();
+  const account = session.accountId ?? (await accountForLegacySession(token, API_BASE, session.sdToken)) ?? "unknown";
+  const ctx: CallContext = { session: sessionHint, account, client: session.clientName ?? "unknown", trace: newTraceId() };
   const rpc = describeRpc(req.body, KNOWN_TOOLS);
-  console.log(`[mcp] session=${sessionHint} ok, handling ${req.method} request rpc=${rpc.rpc}${rpc.tool ? ` tool=${rpc.tool}` : ""} trace=${traceId}`);
-  recordMcpTransaction(rpc, sessionHint, traceId);
-  res.setHeader(TRACE_HEADER, traceId);
+  console.log(`[mcp] session=${sessionHint} ok, handling ${req.method} request rpc=${rpc.rpc}${rpc.tool ? ` tool=${rpc.tool}` : ""} account=${account} client=${JSON.stringify(ctx.client)} trace=${ctx.trace}`);
+  recordMcpTransaction(rpc, ctx);
+  res.setHeader(TRACE_HEADER, ctx.trace);
 
-  const server = createServer(session.sdToken, sessionHint, traceId);
+  const server = createServer(session.sdToken, ctx);
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+  if (rpc.tool) watchToolResult(transport, (req.body as { id?: unknown }).id, rpc.tool, ctx);
   await server.connect(transport);
   await transport.handleRequest(req, res, req.body);
 });
