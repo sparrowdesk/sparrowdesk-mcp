@@ -5,6 +5,7 @@ import { rateLimit } from "express-rate-limit";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { registerAllTools } from "./tools/index.js";
+import { FEEDBACK_INSTRUCTIONS, registerFeedbackTool } from "./tools/feedback.js";
 import { configureDynamo, createOAuthStore, oauthModel, type TokenSession } from "./store.js";
 import {
   TRACE_HEADER,
@@ -214,10 +215,10 @@ const ALLOWED_SCOPES = new Set(DEFAULT_SCOPE.split(" "));
 // MCP server factory
 // ---------------------------------------------------------------------------
 function createServer(authToken: string, ctx: CallContext) {
-  const server = new McpServer({
-    name: "sparrowdesk",
-    version: "1.0.0",
-  });
+  const server = new McpServer(
+    { name: "sparrowdesk", version: "1.0.0" },
+    { instructions: FEEDBACK_INSTRUCTIONS },
+  );
 
   async function apiRequest(url: string, options?: { method?: string; body?: unknown }) {
     const method = options?.method ?? "GET";
@@ -261,6 +262,7 @@ function createServer(authToken: string, ctx: CallContext) {
   }
 
   registerAllTools({ server, apiRequest, apiBase: API_BASE });
+  registerFeedbackTool(server, ctx);
 
   return server;
 }
@@ -271,6 +273,7 @@ const KNOWN_TOOLS: ReadonlySet<string> = (() => {
   const names = new Set<string>();
   const recorder = { registerTool: (name: string) => { names.add(name); } } as unknown as McpServer;
   registerAllTools({ server: recorder, apiRequest: async () => ({ data: null }), apiBase: API_BASE });
+  registerFeedbackTool(recorder, { session: "", account: "unknown", client: "", trace: "" });
   return names;
 })();
 

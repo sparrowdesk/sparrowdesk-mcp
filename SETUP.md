@@ -115,15 +115,18 @@ Inside the container `localhost` is the container itself, so point `DYNAMO_ENDPO
 
 Tool names a client sends that this server does not register are logged as `tool=unknown`, and methods outside the MCP spec as `rpc=other`.
 
-Every `[mcp]`, `api_call` and `tool_result` line carries `account` (the SparrowDesk account, from `GET /me` at sign-in) and `client` (the registering app's `client_name`, e.g. `Claude`).
+Every `[mcp]`, `api_call`, `tool_result` and `mcp_feedback` line carries `account` (the SparrowDesk account, from `GET /me` at sign-in) and `client` (the registering app's `client_name`, e.g. `Claude`).
 
 - `{"event":"tool_result",…}`: one per `tools/call`, with `ok`, `ms`, and for failures `error` (`api_error` with `status`, `invalid_arguments`, `unknown_tool`, `timeout`, `network`, `bad_response`, `rpc_error`) and a short `message` with emails masked.
+- `{"event":"mcp_feedback",…}`: a report from the agent itself via the `report_feedback` tool (`kind`, `summary`, `tool`, `tried`, `would_have_helped`). The server instructions ask agents to file one when a tool falls short.
 
 ```logql
 # failures by tool and kind, last 7 days
 sum by (tool, error) (count_over_time({container="mcp-app"} |= `"event":"tool_result"` | json | ok="false" [7d]))
 # active accounts per day
 count(sum by (account) (count_over_time({container="mcp-app"} |= `"event":"tool_result"` | json [1d])))
+# agent feedback
+{container="mcp-app"} |= `"event":"mcp_feedback"` | json
 ```
 
 ```logql

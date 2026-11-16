@@ -92,6 +92,8 @@ Knowledge Base tools need the collection and article scopes: `VIEW_COLLECTIONS` 
 | `create_article` | Create an article (draft or publish) |
 | `update_article` | Update an article draft / publish |
 | `archive_article` | Archive an article |
+| **Feedback** | |
+| `report_feedback` | Tell the SparrowDesk team where a tool fell short (missing capability, unclear description, unexpected result). Never include customer content |
 
 ## Tool Reference
 
