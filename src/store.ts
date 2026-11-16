@@ -4,6 +4,7 @@ import type { Item } from "dynamoose/dist/Item.js";
 
 export interface RegisteredClient {
   redirectUris: string[];
+  clientName?: string; // client_name from dynamic registration (e.g. "Claude"), for usage by app
 }
 export interface PendingAuth {
   clientRedirectUri: string;
@@ -11,6 +12,7 @@ export interface PendingAuth {
   codeChallenge?: string;
   codeChallengeMethod?: string;
   scope?: string;
+  clientName?: string;
 }
 export interface PendingCode {
   token: string;
@@ -19,11 +21,14 @@ export interface PendingCode {
   clientRedirectUri: string;
   codeChallenge?: string;
   codeChallengeMethod?: string;
+  clientName?: string;
 }
 export interface TokenSession {
   sdToken: string;
   refreshToken: string;
   expiresAt: number; // ms epoch
+  accountId?: number; // SparrowDesk account, from GET /me at sign-in; absent on older sessions
+  clientName?: string;
 }
 
 interface Records {
