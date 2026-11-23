@@ -49,6 +49,8 @@ Other optional variables:
 | `SPARROWDESK_OAUTH_TOKEN_URL` | `{ISSUER}/oauth/token` |
 | `DYNAMO_ENDPOINT` | the regional AWS endpoint |
 
+`POST /oauth/revoke` (RFC 7009) revokes the SparrowDesk tokens behind an MCP token at `{ISSUER}/oauth/revoke` with the same client id and secret, then deletes the session. It has no variable of its own.
+
 ### 3. Create the DynamoDB table
 
 OAuth clients, pending logins and sessions live in one DynamoDB table, `{DYNAMO_PREFIX}oauth`, so they survive restarts and are shared across replicas. Tokens are encrypted with a key derived from `SPARROWDESK_CLIENT_SECRET`. Rotating that secret signs everyone out, which also happens upstream, because SparrowDesk revokes every token when the secret is regenerated.

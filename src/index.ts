@@ -7,6 +7,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { registerAllTools } from "./tools/index.js";
 import { FEEDBACK_INSTRUCTIONS, registerFeedbackTool } from "./tools/feedback.js";
 import { configureDynamo, createOAuthStore, oauthModel, type TokenSession } from "./store.js";
+import { createRevoker, revokeHandler } from "./revoke.js";
 import {
   TRACE_HEADER,
   accountForLegacySession,
@@ -59,6 +60,7 @@ const MCP_PUBLIC_URL = (process.env.MCP_PUBLIC_URL ?? "https://mcp.campaignsparr
 const SD_OAUTH_ISSUER = (process.env.SPARROWDESK_OAUTH_ISSUER ?? "").replace(/\/$/, "");
 const SD_AUTHORIZE_URL = process.env.SPARROWDESK_OAUTH_AUTHORIZE_URL ?? `${SD_OAUTH_ISSUER}/oauth/authorize`;
 const SD_TOKEN_URL = process.env.SPARROWDESK_OAUTH_TOKEN_URL ?? `${SD_OAUTH_ISSUER}/oauth/token`;
+const SD_REVOKE_URL = `${SD_OAUTH_ISSUER}/oauth/revoke`;
 const SD_CLIENT_ID = process.env.SPARROWDESK_CLIENT_ID!;
 const SD_CLIENT_SECRET = process.env.SPARROWDESK_CLIENT_SECRET!;
 
@@ -88,6 +90,7 @@ const KNOWN_OAUTH_ERRORS = new Set([
 configureDynamo(process.env.DYNAMO_REGION!, process.env.DYNAMO_ENDPOINT);
 const oauthTable = oauthModel(process.env.DYNAMO_PREFIX!);
 const store = createOAuthStore({ model: oauthTable, encryptionSecret: SD_CLIENT_SECRET });
+const revokeSession = createRevoker({ store, revokeUrl: SD_REVOKE_URL, clientId: SD_CLIENT_ID, clientSecret: SD_CLIENT_SECRET });
 
 const CLIENT_TTL_SECONDS = 24 * 60 * 60;
 const PENDING_TTL_SECONDS = 10 * 60;
@@ -476,6 +479,7 @@ app.get("/.well-known/oauth-authorization-server", (_req, res) => {
     authorization_endpoint: `${MCP_PUBLIC_URL}/oauth/authorize`,
     token_endpoint: `${MCP_PUBLIC_URL}/oauth/token`,
     registration_endpoint: `${MCP_PUBLIC_URL}/oauth/register`,
+    revocation_endpoint: `${MCP_PUBLIC_URL}/oauth/revoke`,
     response_types_supported: ["code"],
     grant_types_supported: ["authorization_code"],
     code_challenge_methods_supported: ["S256"],
@@ -726,6 +730,9 @@ app.post(["/oauth/token", "/mcp/oauth/token"], authLimiter, requireStore, async 
   console.log(`[token] ok session created token=${mcpToken.slice(0, 8)} account=${accountId ?? "unknown"} client=${JSON.stringify(pending.clientName ?? "unknown")} expires_in=${pending.expiresIn ?? 3600}s`);
   res.json({ access_token: mcpToken, token_type: "Bearer" });
 });
+
+// Token revocation (RFC 7009): revokes the SparrowDesk grant behind an MCP token and deletes its session
+app.post(["/oauth/revoke", "/mcp/oauth/revoke"], authLimiter, requireStore, revokeHandler(revokeSession));
 
 app.all("/mcp", mcpLimiter, requireStore, async (req, res) => {
   const origin = req.headers.origin;

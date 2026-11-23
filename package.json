@@ -8,7 +8,8 @@
     "build": "tsc",
     "start": "node --import newrelic/esm-loader.mjs -r newrelic dist/index.js",
     "dev": "node --env-file=.env --import tsx/esm src/index.ts",
-    "create-table": "node --env-file-if-exists=.env --import tsx/esm src/create-table.ts"
+    "create-table": "node --env-file-if-exists=.env --import tsx/esm src/create-table.ts",
+    "test": "node --import tsx/esm --test \"src/**/*.test.ts\""
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
